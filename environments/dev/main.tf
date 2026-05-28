@@ -5,3 +5,11 @@ module "governance" {
   location            = var.location
   tags                = var.tags
 }
+
+module "networking" {
+  source = "../../modules/02-networking"
+
+  resource_group_name = module.governance.resource_group_name
+  location            = var.location
+  tags                = var.tags
+}
