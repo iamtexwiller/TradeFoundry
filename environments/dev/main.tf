@@ -13,3 +13,12 @@ module "networking" {
   location            = var.location
   tags                = var.tags
 }
+
+module "storage" {
+  source = "../../modules/03-storage"
+
+  resource_group_name  = module.governance.resource_group_name
+  location             = var.location
+  storage_account_name = "sttradefoundrydev"
+  tags                 = var.tags
+}
