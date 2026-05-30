@@ -2,18 +2,19 @@
 
 # 🏗️ TradeFoundry
 
-### Azure Cloud Infrastructure — From Zero to Production
+### Azure Cloud Infrastructure — Ambiente CERT
 
 **Provisionamento completo de infraestrutura Azure para uma fintech de mercado de capitais,
-construído do zero como código — governança, redes, storage, compute e monitoramento.**
+espelhando a arquitetura real de ambientes de Pré-Produção com AKS privado, Jump VM centralizada e Application Gateways dedicados por ambiente.**
 
 [![Terraform](https://img.shields.io/badge/Terraform-1.7+-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)](https://terraform.io)
 [![Azure](https://img.shields.io/badge/Azure-Cloud-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com)
 [![AZ-104](https://img.shields.io/badge/AZ--104-Azure_Administrator-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://learn.microsoft.com/certifications/azure-administrator/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-AKS_Privado-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io)
 [![GitHub Actions](https://img.shields.io/badge/CI/CD-GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/iamtexwiller/TradeFoundry/actions)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-[🏗️ Arquitetura](#️-arquitetura) · [📁 Estrutura](#-estrutura) · [🚀 Deploy](#-deploy) · [📋 Módulos](#-módulos)
+[🏗️ Arquitetura](#️-arquitetura) · [📁 Estrutura](#-estrutura) · [🚀 Deploy](#-deploy) · [📋 Recursos](#-recursos)
 
 </div>
 
@@ -21,15 +22,16 @@ construído do zero como código — governança, redes, storage, compute e moni
 
 ## 💡 Contexto
 
-**TradeFoundry** é uma fintech fictícia de mercado de capitais que precisa de uma infraestrutura Azure completa, segura e escalável — provisionada inteiramente como código.
+**TradeFoundry** é uma fintech fictícia de mercado de capitais que precisa de uma infraestrutura Azure completa, segura e escalável — modelada a partir de arquiteturas reais de ambientes de Pré-Produção financeiros.
 
-Este projeto documenta a construção dessa infraestrutura do zero, seguindo as melhores práticas do mercado:
+O projeto provisiona um **único ambiente CERT** contendo quatro sub-ambientes separados por namespace no mesmo cluster AKS privado — exatamente como grandes instituições financeiras operam:
 
-- **Governança primeiro** — antes de qualquer recurso, definimos quem pode fazer o quê
-- **Rede segmentada** — cada camada isolada com controles de acesso granulares
-- **Tudo como código** — nenhum recurso criado manualmente no portal
-- **Ambientes consistentes** — dev, staging e prod provisionados pelos mesmos módulos
-- **Monitoramento nativo** — observabilidade desde o primeiro recurso
+| Sub-ambiente | Namespace | Propósito |
+|---|---|---|
+| **DEV** | `dev` | Desenvolvimento e integração contínua |
+| **QAA** | `qaa` | Quality Assurance — testes funcionais |
+| **QAB** | `qab` | Quality Assurance — testes de regressão |
+| **CERT** | `cert` | Certificação — homologação final com negócio e parceiros |
 
 ---
 
@@ -37,55 +39,148 @@ Este projeto documenta a construção dessa infraestrutura do zero, seguindo as 
 
 ```mermaid
 flowchart TD
-    subgraph GOV["🔐 Governança"]
-        MG["Management Group\nTradeFoundry"]
-        SUB["Subscription\nTradeFoundry-Prod"]
-        RBAC["RBAC + Roles\nCustomizadas"]
-        POL["Azure Policy\nCompliance"]
-        MG --> SUB
-        SUB --> RBAC
-        SUB --> POL
+    subgraph VNET["🌐 vnet-tradefoundry · 10.0.0.0/16"]
+
+        subgraph APPGW_SUBNET["snet-appgw · 10.0.1.0/24"]
+            GW1["🔀 appgw-dev"]
+            GW2["🔀 appgw-qaa"]
+            GW3["🔀 appgw-qab"]
+            GW4["🔀 appgw-cert"]
+        end
+
+        subgraph AKS_SUBNET["snet-aks · 10.0.2.0/24"]
+            AKS["☸️ aks-tradefoundry\nCluster Privado"]
+            NS1["ns: dev"]
+            NS2["ns: qaa"]
+            NS3["ns: qab"]
+            NS4["ns: cert"]
+            AKS --> NS1
+            AKS --> NS2
+            AKS --> NS3
+            AKS --> NS4
+        end
+
+        subgraph JUMP_SUBNET["snet-jumpvm · 10.0.3.0/24"]
+            JMP["💻 aksjmptf00001c\nJump VM Central\nAcesso kubectl → AKS"]
+        end
+
+        subgraph MGMT_SUBNET["snet-mgmt · 10.0.4.0/24\nAzureBastionSubnet"]
+            BAS["🔐 Azure Bastion\nAcesso seguro à Jump VM"]
+        end
+
     end
 
-    subgraph NET["🌐 Networking"]
-        VNET["Virtual Network\n10.0.0.0/16"]
-        SNET_APP["Subnet App\n10.0.1.0/24"]
-        SNET_DATA["Subnet Data\n10.0.2.0/24"]
-        SNET_MGMT["Subnet Mgmt\n10.0.3.0/24"]
-        NSG["Network Security Groups"]
-        BASTION["Azure Bastion\nAcesso seguro"]
-        VNET --> SNET_APP
-        VNET --> SNET_DATA
-        VNET --> SNET_MGMT
-        NSG --> VNET
-        BASTION --> SNET_MGMT
-    end
+    INT["🌍 Internet"] -->|HTTPS 443| APPGW_SUBNET
+    APPGW_SUBNET -->|Tráfego interno| AKS_SUBNET
+    BAS -->|SSH privado| JMP
+    JMP -->|kubectl| AKS
 
-    subgraph STO["💾 Storage"]
-        BLOB["Blob Storage\nHot · Cool · Archive"]
-        FILES["Azure File Share\nCompartilhamento corporativo"]
-        BACKUP["Azure Backup\nPolítica automatizada"]
-        LIFECYCLE["Lifecycle Management\nTiering automático"]
+    subgraph NSG["🛡️ Network Security Groups"]
+        N1["nsg-appgw\n✓ 80/443 inbound\n✗ deny all resto"]
+        N2["nsg-aks\n✓ AppGW + JumpVM\n✗ deny all resto"]
+        N3["nsg-jumpvm\n✓ Apenas Bastion\n✗ deny all resto"]
     end
+```
 
-    subgraph COMP["🖥️ Compute"]
-        VMSS["VM Scale Sets\nAuto-scaling"]
-        APP["App Service\nDeployment Slots"]
-        ACI["Container Instances\nWorkloads temporários"]
-    end
+---
 
-    subgraph MON["📊 Monitoramento"]
-        LAW["Log Analytics Workspace"]
-        AI["Application Insights"]
-        ALERTS["Azure Monitor Alerts"]
-        DIAG["Diagnostic Settings"]
-    end
+## 📋 Recursos provisionados
 
-    GOV --> NET
-    NET --> STO
-    NET --> COMP
-    COMP --> MON
-    STO --> MON
+### 🔐 Governança
+| Recurso | Nome | Descrição |
+|---|---|---|
+| Resource Group | `RG-TRADEFOUNDRY-CERT` | Container de todos os recursos |
+| Azure Policy | `tradefoundry-require-tags` | Exige tags obrigatórias em todos os recursos |
+| Tags obrigatórias | `environment · project · owner` | Rastreabilidade e governança |
+
+### 🌐 Networking
+| Recurso | Nome | CIDR |
+|---|---|---|
+| Virtual Network | `vnet-tradefoundry` | `10.0.0.0/16` |
+| Subnet AppGW | `snet-appgw` | `10.0.1.0/24` |
+| Subnet AKS | `snet-aks` | `10.0.2.0/24` |
+| Subnet Jump VM | `snet-jumpvm` | `10.0.3.0/24` |
+| Subnet Bastion | `AzureBastionSubnet` | `10.0.4.0/24` |
+| NSG AppGW | `nsg-appgw` | Permite 80/443 inbound |
+| NSG AKS | `nsg-aks` | Permite apenas AppGW e Jump VM |
+| NSG Jump VM | `nsg-jumpvm` | Permite apenas via Bastion |
+
+### 🔀 Application Gateways
+| Recurso | Nome | Namespace alvo |
+|---|---|---|
+| AppGW DEV | `appgw-dev` | `dev` |
+| AppGW QAA | `appgw-qaa` | `qaa` |
+| AppGW QAB | `appgw-qab` | `qab` |
+| AppGW CERT | `appgw-cert` | `cert` |
+
+### ☸️ AKS — Cluster Privado
+| Configuração | Valor |
+|---|---|
+| Nome | `aks-tradefoundry` |
+| Tipo | **Privado** — sem endpoint público |
+| Subnet | `snet-aks` |
+| Namespaces | `dev · qaa · qab · cert` |
+| Acesso | Exclusivamente via Jump VM `aksjmptf00001c` |
+
+### 💻 Jump VM — Centralizada
+| Configuração | Valor |
+|---|---|
+| Nome | `aksjmptf00001c` |
+| Função | Acesso centralizado a todos os clusters do ambiente |
+| Subnet | `snet-jumpvm` |
+| Acesso | Exclusivamente via Azure Bastion |
+| Ferramentas | `kubectl · azure-cli · helm` |
+
+### 🔐 Azure Bastion
+| Configuração | Valor |
+|---|---|
+| Nome | `bastion-tradefoundry` |
+| Função | Acesso seguro à Jump VM sem expor RDP/SSH |
+| Subnet | `AzureBastionSubnet` |
+
+---
+
+## 🔄 Fluxo de acesso ao cluster
+
+```
+Operador
+    │
+    │  Acessa via browser
+    ▼
+Azure Bastion (HTTPS)
+    │
+    │  SSH privado
+    ▼
+Jump VM: aksjmptf00001c
+    │
+    │  kubectl
+    ▼
+AKS Privado: aks-tradefoundry
+    │
+    ├── namespace: dev
+    ├── namespace: qaa
+    ├── namespace: qab
+    └── namespace: cert
+```
+
+---
+
+## 🔄 Fluxo de tráfego das aplicações
+
+```
+Internet / Parceiros externos
+    │
+    │  HTTPS 443
+    ▼
+Application Gateway (por ambiente)
+    │
+    │  Roteamento interno
+    ▼
+AKS — Ingress Controller
+    │
+    ├── /app-banking  → Pod no namespace correto
+    ├── /app-uif      → Pod no namespace correto
+    └── /app-corp     → Pod no namespace correto
 ```
 
 ---
@@ -95,210 +190,55 @@ flowchart TD
 ```
 TradeFoundry/
 │
-├── environments/                  → Configuração por ambiente
-│   ├── dev/
-│   │   ├── main.tf                → Entry point do ambiente dev
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── terraform.tfvars       → Valores específicos do dev
-│   ├── staging/
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── terraform.tfvars
-│   └── prod/
-│       ├── main.tf
-│       ├── variables.tf
-│       ├── outputs.tf
-│       └── terraform.tfvars
-│
 ├── modules/                       → Módulos reutilizáveis
-│   ├── 01-governance/             → Management Groups, RBAC, Policy
+│   ├── 01-governance/             → Resource Group, Tags, Policy
 │   │   ├── main.tf
 │   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── README.md
-│   ├── 02-networking/             → VNet, Subnets, NSG, Bastion
+│   │   └── outputs.tf
+│   ├── 02-networking/             → VNet, Subnets, NSGs, Bastion
 │   │   ├── main.tf
 │   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── README.md
-│   ├── 03-storage/                → Blob, Files, Backup, Lifecycle
+│   │   └── outputs.tf
+│   ├── 03-jumpvm/                 → Jump VM centralizada
 │   │   ├── main.tf
 │   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── README.md
-│   ├── 04-compute/                → VMSS, App Service, ACI
+│   │   └── outputs.tf
+│   ├── 04-aks/                    → AKS privado + namespaces
 │   │   ├── main.tf
 │   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── README.md
-│   └── 05-monitoring/             → Log Analytics, Alerts, Insights
+│   │   └── outputs.tf
+│   ├── 05-appgateway/             → Application Gateways por ambiente
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── 06-monitoring/             → Application Insights, Alerts
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+│
+├── environments/
+│   └── cert/                      → Ambiente CERT (único)
 │       ├── main.tf
 │       ├── variables.tf
 │       ├── outputs.tf
-│       └── README.md
+│       ├── providers.tf
+│       └── terraform.tfvars
 │
 ├── .github/
 │   └── workflows/
-│       ├── terraform-plan.yml     → PR: roda terraform plan
-│       └── terraform-apply.yml    → Merge: aplica infraestrutura
+│       ├── terraform-plan.yml     → PR: terraform plan
+│       └── terraform-apply.yml    → Merge: terraform apply
 │
 ├── docs/
-│   ├── architecture.md            → Documentação detalhada
-│   ├── decisions.md               → Decisões de arquitetura (ADRs)
-│   └── assets/
-│       └── diagrams/
+│   └── architecture.md
 │
 ├── scripts/
-│   ├── init.sh                    → Inicialização do projeto
-│   └── destroy.sh                 → Destruição segura dos recursos
+│   ├── init.sh
+│   └── destroy.sh
 │
-├── .terraform.lock.hcl
-├── .gitignore
-├── backend.tf                     → Remote state no Azure Storage
-├── providers.tf                   → Provider Azure configurado
+├── backend.tf
+├── providers.tf
 └── README.md
-```
-
----
-
-## 📋 Módulos
-
-### 🔐 01 — Governança & Identidade
-**O primeiro passo de qualquer infraestrutura corporativa.**
-
-Antes de criar qualquer recurso, definimos quem pode fazer o quê e quais políticas se aplicam a toda a organização.
-
-| Recurso | Descrição |
-|---|---|
-| Management Group | Hierarquia organizacional da TradeFoundry |
-| Azure Policy | Bloqueia recursos fora de regiões permitidas |
-| Azure Policy | Exige tags obrigatórias em todos os recursos |
-| Azure Policy | Força criptografia em storage accounts |
-| RBAC — Owner | Acesso total — apenas para o time de Cloud |
-| RBAC — Contributor | Deploy de recursos — time de DevOps |
-| RBAC — Reader | Leitura — time de suporte e auditoria |
-| RBAC — Custom | Roles customizadas por squad |
-
-### 🌐 02 — Networking
-**A fundação da segurança — nada entra ou sai sem controle.**
-
-| Recurso | CIDR | Descrição |
-|---|---|---|
-| Virtual Network | 10.0.0.0/16 | Rede principal da TradeFoundry |
-| Subnet App | 10.0.1.0/24 | Aplicações e APIs |
-| Subnet Data | 10.0.2.0/24 | Banco de dados e storage |
-| Subnet Management | 10.0.3.0/24 | Bastion e ferramentas de gestão |
-| NSG App | — | Permite 443 inbound, bloqueia o resto |
-| NSG Data | — | Permite acesso apenas da subnet App |
-| NSG Mgmt | — | Permite acesso apenas via Bastion |
-| Azure Bastion | — | Acesso seguro às VMs sem RDP/SSH exposto |
-
-### 💾 03 — Storage
-**Dados financeiros exigem armazenamento inteligente e seguro.**
-
-| Recurso | Configuração | Descrição |
-|---|---|---|
-| Blob Storage — Hot | LRS | Dados acessados frequentemente |
-| Blob Storage — Cool | LRS | Dados acessados mensalmente |
-| Blob Storage — Archive | LRS | Dados históricos e compliance |
-| Lifecycle Policy | Automático | Hot → Cool após 30 dias |
-| Lifecycle Policy | Automático | Cool → Archive após 90 dias |
-| Azure File Share | SMB | Compartilhamento corporativo |
-| Azure Backup | Diário | Retenção de 30 dias |
-| SAS Tokens | Expiração 24h | Acesso temporário e auditável |
-
-### 🖥️ 04 — Compute
-**Escalabilidade automática para workloads de mercado financeiro.**
-
-| Recurso | Configuração | Descrição |
-|---|---|---|
-| VM Scale Sets | Min: 2 / Max: 10 | Auto-scaling por CPU > 70% |
-| App Service Plan | Standard S2 | Suporte a deployment slots |
-| Deployment Slot — Staging | — | Testes antes de ir para produção |
-| Deployment Slot — Production | — | Swap sem downtime |
-| Container Instances | On-demand | Jobs temporários e batch |
-
-### 📊 05 — Monitoramento
-**Infraestrutura sem monitoramento é operar no escuro.**
-
-| Recurso | Configuração | Descrição |
-|---|---|---|
-| Log Analytics Workspace | 30 dias retenção | Central de logs de todos os recursos |
-| Diagnostic Settings | Todos os recursos | Envia logs para o workspace |
-| Application Insights | — | Monitoramento de aplicações |
-| Alert — CPU Alta | > 80% por 5min | Escala automática |
-| Alert — Disponibilidade | < 99% | Notificação imediata |
-| Alert — Storage | > 85% capacidade | Expansão proativa |
-| Azure Monitor Workbook | — | Dashboard executivo |
-
----
-
-## 🌍 Ambientes
-
-| Ambiente | Propósito | Scale Sets | App Service | Retenção de Logs |
-|---|---|---|---|---|
-| **dev** | Desenvolvimento | Min: 1 / Max: 2 | Free F1 | 7 dias |
-| **staging** | Homologação | Min: 1 / Max: 3 | Standard S1 | 14 dias |
-| **prod** | Produção | Min: 2 / Max: 10 | Standard S2 | 30 dias |
-
----
-
-## 🔄 Pipeline CI/CD
-
-```
-Pull Request aberto
-        │
-        ▼
-GitHub Actions — terraform-plan.yml
-        │
-        ├── terraform fmt (valida formatação)
-        ├── terraform init
-        ├── terraform validate
-        └── terraform plan → comentário automático no PR
-        │
-        ▼
-Code Review + Aprovação
-        │
-        ▼
-Merge na main
-        │
-        ▼
-GitHub Actions — terraform-apply.yml
-        │
-        └── terraform apply → infraestrutura atualizada
-```
-
----
-
-## 🚀 Deploy
-
-### Pré-requisitos
-- Terraform >= 1.7
-- Azure CLI autenticado (`az login`)
-- Acesso à subscription TradeFoundry
-
-### Inicialização
-
-```bash
-# Clone o repositório
-git clone https://github.com/iamtexwiller/TradeFoundry.git
-cd TradeFoundry
-
-# Inicialize o ambiente desejado
-cd environments/dev
-terraform init
-terraform plan
-terraform apply
-```
-
-### Destruição segura
-
-```bash
-# Para evitar custos — destrua quando não estiver usando
-cd environments/dev
-terraform destroy
 ```
 
 ---
@@ -307,15 +247,14 @@ terraform destroy
 
 - [x] Definição da arquitetura
 - [x] Documentação inicial
-- [ ] **Módulo 01** — Governança & Identidade
-- [ ] **Módulo 02** — Networking
-- [ ] **Módulo 03** — Storage
-- [ ] **Módulo 04** — Compute
-- [ ] **Módulo 05** — Monitoramento
+- [ ] **Módulo 01** — Governança & Tags
+- [ ] **Módulo 02** — Networking (VNet, Subnets, NSGs, Bastion)
+- [ ] **Módulo 03** — Jump VM centralizada (`aksjmptf00001c`)
+- [ ] **Módulo 04** — AKS privado com namespaces (dev, qaa, qab, cert)
+- [ ] **Módulo 05** — Application Gateways (um por ambiente)
+- [ ] **Módulo 06** — Monitoramento (Application Insights, Alerts)
 - [ ] **Pipeline CI/CD** — Terraform plan/apply automatizado
-- [ ] **Ambiente Dev** — primeiro ambiente completo
-- [ ] **Ambiente Staging** — validação
-- [ ] **Ambiente Prod** — produção completa
+- [ ] **Ambiente CERT** — completo e funcional
 
 ---
 
@@ -325,6 +264,7 @@ terraform destroy
 
 ![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)
 ![Azure](https://img.shields.io/badge/Azure-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
 ![Azure Policy](https://img.shields.io/badge/Azure_Policy-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
 ![Azure Monitor](https://img.shields.io/badge/Azure_Monitor-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
@@ -345,7 +285,7 @@ Application Support Engineer L2 | Hybrid Cloud & On-Prem @ B3
 
 <div align="center">
 
-**TradeFoundry — Azure Cloud Infrastructure From Zero to Production**
-Construindo infraestrutura de mercado de capitais como código, do zero à produção.
+**TradeFoundry — Azure Cloud Infrastructure — Ambiente CERT**
+Infraestrutura de mercado de capitais como código, espelhando arquiteturas reais de Pré-Produção.
 
 </div>
