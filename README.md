@@ -28,10 +28,10 @@ O projeto provisiona um **único ambiente CERT** contendo quatro sub-ambientes s
 
 | Sub-ambiente | Namespace | Propósito |
 |---|---|---|
-| **DEV** | `dev` | Desenvolvimento e integração contínua |
-| **QAA** | `qaa` | Quality Assurance — testes funcionais |
-| **QAB** | `qab` | Quality Assurance — testes de regressão |
-| **CERT** | `cert` | Certificação — homologação final com negócio e parceiros |
+| **DEV** | `tradefoundry-dev` | Desenvolvimento e integração contínua |
+| **QAA** | `tradefoundry-qaa` | Quality Assurance — testes funcionais |
+| **QAB** | `tradefoundry-qab` | Quality Assurance — testes de regressão |
+| **CERT** | `tradefoundry-cert` | Certificação — homologação final com negócio e parceiros |
 
 ---
 
@@ -48,37 +48,41 @@ flowchart TD
             GW4["🔀 appgw-cert"]
         end
 
-        subgraph AKS_SUBNET["snet-aks · 10.0.2.0/24"]
-            AKS["☸️ aks-tradefoundry\nCluster Privado"]
-            NS1["ns: dev"]
-            NS2["ns: qaa"]
-            NS3["ns: qab"]
-            NS4["ns: cert"]
-            AKS --> NS1
-            AKS --> NS2
-            AKS --> NS3
-            AKS --> NS4
-        end
-
         subgraph JUMP_SUBNET["snet-jumpvm · 10.0.3.0/24"]
-            JMP["💻 aksjmptf00001c\nJump VM Central\nAcesso kubectl → AKS"]
+            JMP["💻 aksjmptf00001c\nJump VM Central\nkubectl · az cli · helm"]
         end
 
-        subgraph MGMT_SUBNET["snet-mgmt · 10.0.4.0/24\nAzureBastionSubnet"]
+        subgraph MGMT_SUBNET["AzureBastionSubnet · 10.0.4.0/24"]
             BAS["🔐 Azure Bastion\nAcesso seguro à Jump VM"]
         end
 
     end
 
-    INT["🌍 Internet"] -->|HTTPS 443| APPGW_SUBNET
-    APPGW_SUBNET -->|Tráfego interno| AKS_SUBNET
-    BAS -->|SSH privado| JMP
-    JMP -->|kubectl| AKS
+    subgraph AKS_VNET["🌐 aks-vnet-17675103 (gerenciada pelo Azure)"]
+        subgraph AKS_SUBNET["snet-aks · 10.224.0.0/16"]
+            AKS["☸️ aks-tradefoundry\nCluster Privado · v1.34.7"]
+            NS1["ns: tradefoundry-dev"]
+            NS2["ns: tradefoundry-qaa"]
+            NS3["ns: tradefoundry-qab"]
+            NS4["ns: tradefoundry-cert"]
+            AKS --> NS1
+            AKS --> NS2
+            AKS --> NS3
+            AKS --> NS4
+        end
+    end
 
-    subgraph NSG["🛡️ Network Security Groups"]
-        N1["nsg-appgw\n✓ 80/443 inbound\n✗ deny all resto"]
-        N2["nsg-aks\n✓ AppGW + JumpVM\n✗ deny all resto"]
-        N3["nsg-jumpvm\n✓ Apenas Bastion\n✗ deny all resto"]
+    PEERING["🔗 VNet Peering\npeer-tradefoundry-to-aks\npeer-aks-to-tradefoundry"]
+
+    VNET <--> PEERING <--> AKS_VNET
+
+    INT["🌍 Internet"] -->|HTTPS 443| APPGW_SUBNET
+    APPGW_SUBNET -->|Tráfego interno via Peering| AKS
+    BAS -->|SSH privado| JMP
+    JMP -->|kubectl via Peering| AKS
+
+    subgraph DNS["🔍 Private DNS Zone"]
+        PDNS["e2f9c0ca...privatelink.eastus2.azmk8s.io\nLinked → vnet-tradefoundry"]
     end
 ```
 
@@ -98,44 +102,47 @@ flowchart TD
 |---|---|---|
 | Virtual Network | `vnet-tradefoundry` | `10.0.0.0/16` |
 | Subnet AppGW | `snet-appgw` | `10.0.1.0/24` |
-| Subnet AKS | `snet-aks` | `10.0.2.0/24` |
 | Subnet Jump VM | `snet-jumpvm` | `10.0.3.0/24` |
 | Subnet Bastion | `AzureBastionSubnet` | `10.0.4.0/24` |
 | NSG AppGW | `nsg-appgw` | Permite 80/443 inbound |
 | NSG AKS | `nsg-aks` | Permite apenas AppGW e Jump VM |
 | NSG Jump VM | `nsg-jumpvm` | Permite apenas via Bastion |
+| VNet Peering | `peer-tradefoundry-to-aks` | Conecta vnet-tradefoundry ↔ aks-vnet-17675103 |
+| Private DNS Zone Link | `link-vnet-tradefoundry` | Resolução DNS privado do AKS |
 
 ### 🔀 Application Gateways
 | Recurso | Nome | Namespace alvo |
 |---|---|---|
-| AppGW DEV | `appgw-dev` | `dev` |
-| AppGW QAA | `appgw-qaa` | `qaa` |
-| AppGW QAB | `appgw-qab` | `qab` |
-| AppGW CERT | `appgw-cert` | `cert` |
+| AppGW DEV | `appgw-dev` | `tradefoundry-dev` |
+| AppGW QAA | `appgw-qaa` | `tradefoundry-qaa` |
+| AppGW QAB | `appgw-qab` | `tradefoundry-qab` |
+| AppGW CERT | `appgw-cert` | `tradefoundry-cert` |
 
 ### ☸️ AKS — Cluster Privado
 | Configuração | Valor |
 |---|---|
 | Nome | `aks-tradefoundry` |
+| Versão | Kubernetes v1.34.7 |
 | Tipo | **Privado** — sem endpoint público |
-| Subnet | `snet-aks` |
-| Namespaces | `dev · qaa · qab · cert` |
+| VNet | `aks-vnet-17675103` (gerenciada pelo Azure) |
+| Node | `aks-agentpool-42299989-vmss000000` · Ready |
+| Namespaces | `tradefoundry-dev · tradefoundry-qaa · tradefoundry-qab · tradefoundry-cert` |
 | Acesso | Exclusivamente via Jump VM `aksjmptf00001c` |
 
 ### 💻 Jump VM — Centralizada
 | Configuração | Valor |
 |---|---|
 | Nome | `aksjmptf00001c` |
-| Função | Acesso centralizado a todos os clusters do ambiente |
-| Subnet | `snet-jumpvm` |
+| OS | Ubuntu Server 24.04 LTS |
+| Subnet | `snet-jumpvm` · `10.0.3.4` |
 | Acesso | Exclusivamente via Azure Bastion |
-| Ferramentas | `kubectl · azure-cli · helm` |
+| Ferramentas | `kubectl · azure-cli` |
 
 ### 🔐 Azure Bastion
 | Configuração | Valor |
 |---|---|
 | Nome | `bastion-tradefoundry` |
-| Função | Acesso seguro à Jump VM sem expor RDP/SSH |
+| Função | Acesso seguro à Jump VM sem expor SSH |
 | Subnet | `AzureBastionSubnet` |
 
 ---
@@ -145,22 +152,22 @@ flowchart TD
 ```
 Operador
     │
-    │  Acessa via browser
+    │  Acessa via browser (HTTPS)
     ▼
-Azure Bastion (HTTPS)
+Azure Bastion
     │
-    │  SSH privado
+    │  SSH privado → 10.0.3.4
     ▼
 Jump VM: aksjmptf00001c
     │
-    │  kubectl
+    │  kubectl (via VNet Peering)
     ▼
 AKS Privado: aks-tradefoundry
     │
-    ├── namespace: dev
-    ├── namespace: qaa
-    ├── namespace: qab
-    └── namespace: cert
+    ├── namespace: tradefoundry-dev
+    ├── namespace: tradefoundry-qaa
+    ├── namespace: tradefoundry-qab
+    └── namespace: tradefoundry-cert
 ```
 
 ---
@@ -174,14 +181,28 @@ Internet / Parceiros externos
     ▼
 Application Gateway (por ambiente)
     │
-    │  Roteamento interno
+    │  Roteamento interno via VNet Peering
     ▼
 AKS — Ingress Controller
     │
-    ├── /app-banking  → Pod no namespace correto
-    ├── /app-uif      → Pod no namespace correto
-    └── /app-corp     → Pod no namespace correto
+    ├── tradefoundry-dev  → Pods de desenvolvimento
+    ├── tradefoundry-qaa  → Pods de QA funcional
+    ├── tradefoundry-qab  → Pods de QA regressão
+    └── tradefoundry-cert → Pods de homologação
 ```
+
+---
+
+## 🔍 Decisões técnicas
+
+### Por que VNet Peering?
+O AKS no modo privado cria uma VNet gerenciada pelo Azure (`aks-vnet-17675103`) separada da VNet principal. Para que a Jump VM consiga alcançar o endpoint privado do cluster (`10.224.0.4:443`), foi necessário criar um **VNet Peering bidirecional** entre as duas VNets.
+
+### Por que Private DNS Zone Link?
+O endpoint privado do AKS usa uma zona DNS privada (`privatelink.eastus2.azmk8s.io`). Para que a Jump VM resolva o FQDN do cluster, a zona DNS foi linkada à `vnet-tradefoundry` — sem isso, o `kubectl` não consegue resolver o hostname do cluster.
+
+### Por que namespaces por ambiente?
+Em vez de clusters separados (mais caro e complexo), os 4 ambientes compartilham o mesmo cluster AKS separados por namespace — exatamente como grandes instituições financeiras operam para otimizar recursos e manter isolamento lógico.
 
 ---
 
@@ -190,54 +211,21 @@ AKS — Ingress Controller
 ```
 TradeFoundry/
 │
-├── modules/                       → Módulos reutilizáveis
-│   ├── 01-governance/             → Resource Group, Tags, Policy
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── 02-networking/             → VNet, Subnets, NSGs, Bastion
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── 03-jumpvm/                 → Jump VM centralizada
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── 04-aks/                    → AKS privado + namespaces
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   ├── 05-appgateway/             → Application Gateways por ambiente
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   └── 06-monitoring/             → Application Insights, Alerts
-│       ├── main.tf
-│       ├── variables.tf
-│       └── outputs.tf
+├── modules/
+│   ├── 01-governance/
+│   ├── 02-networking/
+│   ├── 03-jumpvm/
+│   ├── 04-aks/
+│   ├── 05-appgateway/
+│   └── 06-monitoring/
 │
 ├── environments/
-│   └── cert/                      → Ambiente CERT (único)
-│       ├── main.tf
-│       ├── variables.tf
-│       ├── outputs.tf
-│       ├── providers.tf
-│       └── terraform.tfvars
+│   └── cert/
 │
 ├── .github/
 │   └── workflows/
-│       ├── terraform-plan.yml     → PR: terraform plan
-│       └── terraform-apply.yml    → Merge: terraform apply
 │
 ├── docs/
-│   └── architecture.md
-│
-├── scripts/
-│   ├── init.sh
-│   └── destroy.sh
-│
-├── backend.tf
-├── providers.tf
 └── README.md
 ```
 
@@ -246,15 +234,13 @@ TradeFoundry/
 ## 🗺️ Roadmap
 
 - [x] Definição da arquitetura
-- [x] Documentação inicial
-- [ ] **Módulo 01** — Governança & Tags
-- [ ] **Módulo 02** — Networking (VNet, Subnets, NSGs, Bastion)
-- [ ] **Módulo 03** — Jump VM centralizada (`aksjmptf00001c`)
-- [ ] **Módulo 04** — AKS privado com namespaces (dev, qaa, qab, cert)
+- [x] Documentação
+- [x] **Módulo 01** — Governança (RG + Policy + Tags)
+- [x] **Módulo 02** — Networking (VNet + Subnets + NSGs + Bastion + Peering)
+- [x] **Módulo 03** — Jump VM (`aksjmptf00001c` + kubectl + az cli)
+- [x] **Módulo 04** — AKS privado + namespaces + Private DNS Zone
 - [ ] **Módulo 05** — Application Gateways (um por ambiente)
-- [ ] **Módulo 06** — Monitoramento (Application Insights, Alerts)
-- [ ] **Pipeline CI/CD** — Terraform plan/apply automatizado
-- [ ] **Ambiente CERT** — completo e funcional
+- [ ] **Módulo 06** — Monitoramento
 
 ---
 
@@ -262,11 +248,11 @@ TradeFoundry/
 
 <div align="center">
 
-![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)
 ![Azure](https://img.shields.io/badge/Azure-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
-![Azure Policy](https://img.shields.io/badge/Azure_Policy-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
+![Ubuntu](https://img.shields.io/badge/Ubuntu-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)
 ![Azure Monitor](https://img.shields.io/badge/Azure_Monitor-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
 
 </div>
