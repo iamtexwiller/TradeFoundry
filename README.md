@@ -37,6 +37,8 @@ O projeto provisiona um **único ambiente CERT** contendo quatro sub-ambientes s
 
 ## 🏗️ Arquitetura
 
+![Arquitetura TradeFoundry](./arquitetura.png)
+
 ```mermaid
 flowchart TD
     subgraph VNET["🌐 vnet-tradefoundry · 10.0.0.0/16"]
