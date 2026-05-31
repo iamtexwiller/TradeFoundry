@@ -5,16 +5,16 @@
 ### Azure Cloud Infrastructure — Ambiente CERT
 
 **Provisionamento completo de infraestrutura Azure para uma fintech de mercado de capitais,
-espelhando a arquitetura real de ambientes de Pré-Produção com AKS privado, Jump VM centralizada e Application Gateways dedicados por ambiente.**
+espelhando a arquitetura real de ambientes de Pré-Produção com AKS privado, Jump VM centralizada, Application Gateways dedicados por ambiente e monitoramento centralizado.**
 
-[![Terraform](https://img.shields.io/badge/Terraform-1.7+-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)](https://terraform.io)
 [![Azure](https://img.shields.io/badge/Azure-Cloud-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com)
 [![AZ-104](https://img.shields.io/badge/AZ--104-Azure_Administrator-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://learn.microsoft.com/certifications/azure-administrator/)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-AKS_Privado-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io)
+[![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)](https://terraform.io)
 [![GitHub Actions](https://img.shields.io/badge/CI/CD-GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/iamtexwiller/TradeFoundry/actions)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-[🏗️ Arquitetura](#️-arquitetura) · [📁 Estrutura](#-estrutura) · [🚀 Deploy](#-deploy) · [📋 Recursos](#-recursos)
+[🏗️ Arquitetura](#️-arquitetura) · [📋 Recursos](#-recursos-provisionados) · [🔄 Fluxos](#-fluxo-de-acesso-ao-cluster) · [🗺️ Roadmap](#️-roadmap)
 
 </div>
 
@@ -49,7 +49,7 @@ flowchart TD
         end
 
         subgraph JUMP_SUBNET["snet-jumpvm · 10.0.3.0/24"]
-            JMP["💻 aksjmptf00001c\nJump VM Central\nkubectl · az cli · helm"]
+            JMP["💻 aksjmptf00001c\nJump VM Central\nkubectl · az cli"]
         end
 
         subgraph MGMT_SUBNET["AzureBastionSubnet · 10.0.4.0/24"]
@@ -59,7 +59,7 @@ flowchart TD
     end
 
     subgraph AKS_VNET["🌐 aks-vnet-17675103 (gerenciada pelo Azure)"]
-        subgraph AKS_SUBNET["snet-aks · 10.224.0.0/16"]
+        subgraph AKS_SUBNET["10.224.0.0/16"]
             AKS["☸️ aks-tradefoundry\nCluster Privado · v1.34.7"]
             NS1["ns: tradefoundry-dev"]
             NS2["ns: tradefoundry-qaa"]
@@ -72,18 +72,21 @@ flowchart TD
         end
     end
 
-    PEERING["🔗 VNet Peering\npeer-tradefoundry-to-aks\npeer-aks-to-tradefoundry"]
+    subgraph MON["📊 Monitoramento"]
+        LAW["📋 law-tradefoundry\nLog Analytics Workspace"]
+        APPI["📈 appi-tradefoundry\nApplication Insights"]
+        ALERT["🚨 alert-tradefoundry-node-down\nAlerta de nodes indisponíveis"]
+        LAW --> APPI
+        AKS --> LAW
+    end
 
+    PEERING["🔗 VNet Peering\npeer-tradefoundry-to-aks"]
     VNET <--> PEERING <--> AKS_VNET
 
     INT["🌍 Internet"] -->|HTTPS 443| APPGW_SUBNET
-    APPGW_SUBNET -->|Tráfego interno via Peering| AKS
+    APPGW_SUBNET -->|via Peering| AKS
     BAS -->|SSH privado| JMP
     JMP -->|kubectl via Peering| AKS
-
-    subgraph DNS["🔍 Private DNS Zone"]
-        PDNS["e2f9c0ca...privatelink.eastus2.azmk8s.io\nLinked → vnet-tradefoundry"]
-    end
 ```
 
 ---
@@ -98,25 +101,27 @@ flowchart TD
 | Tags obrigatórias | `environment · project · owner` | Rastreabilidade e governança |
 
 ### 🌐 Networking
-| Recurso | Nome | CIDR |
+| Recurso | Nome | CIDR / Detalhe |
 |---|---|---|
 | Virtual Network | `vnet-tradefoundry` | `10.0.0.0/16` |
 | Subnet AppGW | `snet-appgw` | `10.0.1.0/24` |
 | Subnet Jump VM | `snet-jumpvm` | `10.0.3.0/24` |
 | Subnet Bastion | `AzureBastionSubnet` | `10.0.4.0/24` |
-| NSG AppGW | `nsg-appgw` | Permite 80/443 inbound |
+| NSG AppGW | `nsg-appgw` | Permite 80/443 + 65200-65535 (Internet) inbound |
 | NSG AKS | `nsg-aks` | Permite apenas AppGW e Jump VM |
 | NSG Jump VM | `nsg-jumpvm` | Permite apenas via Bastion |
 | VNet Peering | `peer-tradefoundry-to-aks` | Conecta vnet-tradefoundry ↔ aks-vnet-17675103 |
 | Private DNS Zone Link | `link-vnet-tradefoundry` | Resolução DNS privado do AKS |
 
+> ⚠️ **Lição aprendida:** O NSG da subnet do Application Gateway V2 exige regra de entrada permitindo portas **65200-65535** com source **Internet** — necessário para o gerenciamento interno do serviço.
+
 ### 🔀 Application Gateways
-| Recurso | Nome | Namespace alvo |
+| Recurso | Public IP | Namespace alvo |
 |---|---|---|
-| AppGW DEV | `appgw-dev` | `tradefoundry-dev` |
-| AppGW QAA | `appgw-qaa` | `tradefoundry-qaa` |
-| AppGW QAB | `appgw-qab` | `tradefoundry-qab` |
-| AppGW CERT | `appgw-cert` | `tradefoundry-cert` |
+| `appgw-dev` | `pip-appgw-dev` | `tradefoundry-dev` |
+| `appgw-qaa` | `pip-appgw-qaa` | `tradefoundry-qaa` |
+| `appgw-qab` | `pip-appgw-qab` | `tradefoundry-qab` |
+| `appgw-cert` | `pip-appgw-cert` | `tradefoundry-cert` |
 
 ### ☸️ AKS — Cluster Privado
 | Configuração | Valor |
@@ -134,7 +139,7 @@ flowchart TD
 |---|---|
 | Nome | `aksjmptf00001c` |
 | OS | Ubuntu Server 24.04 LTS |
-| Subnet | `snet-jumpvm` · `10.0.3.4` |
+| IP | `10.0.3.4` (snet-jumpvm) |
 | Acesso | Exclusivamente via Azure Bastion |
 | Ferramentas | `kubectl · azure-cli` |
 
@@ -145,6 +150,13 @@ flowchart TD
 | Função | Acesso seguro à Jump VM sem expor SSH |
 | Subnet | `AzureBastionSubnet` |
 
+### 📊 Monitoramento
+| Recurso | Nome | Descrição |
+|---|---|---|
+| Log Analytics Workspace | `law-tradefoundry` | Centraliza logs de todos os recursos |
+| Application Insights | `appi-tradefoundry` | Monitoramento de aplicações (workspace-based) |
+| Alert Rule | `alert-tradefoundry-node-down` | Alerta quando nodes do AKS ficam indisponíveis |
+
 ---
 
 ## 🔄 Fluxo de acesso ao cluster
@@ -152,7 +164,7 @@ flowchart TD
 ```
 Operador
     │
-    │  Acessa via browser (HTTPS)
+    │  Browser (HTTPS)
     ▼
 Azure Bastion
     │
@@ -204,30 +216,8 @@ O endpoint privado do AKS usa uma zona DNS privada (`privatelink.eastus2.azmk8s.
 ### Por que namespaces por ambiente?
 Em vez de clusters separados (mais caro e complexo), os 4 ambientes compartilham o mesmo cluster AKS separados por namespace — exatamente como grandes instituições financeiras operam para otimizar recursos e manter isolamento lógico.
 
----
-
-## 📁 Estrutura do projeto
-
-```
-TradeFoundry/
-│
-├── modules/
-│   ├── 01-governance/
-│   ├── 02-networking/
-│   ├── 03-jumpvm/
-│   ├── 04-aks/
-│   ├── 05-appgateway/
-│   └── 06-monitoring/
-│
-├── environments/
-│   └── cert/
-│
-├── .github/
-│   └── workflows/
-│
-├── docs/
-└── README.md
-```
+### Por que Application Gateway V2 exige regra Internet nas portas 65200-65535?
+O Azure Application Gateway Standard V2 utiliza essas portas para comunicação interna de gerenciamento entre a infraestrutura do Azure e o gateway. Sem essa regra no NSG, o deployment falha com erro `ApplicationGatewaySubnetInboundTrafficBlockedByNetworkSecurityGroup`.
 
 ---
 
@@ -239,8 +229,8 @@ TradeFoundry/
 - [x] **Módulo 02** — Networking (VNet + Subnets + NSGs + Bastion + Peering)
 - [x] **Módulo 03** — Jump VM (`aksjmptf00001c` + kubectl + az cli)
 - [x] **Módulo 04** — AKS privado + namespaces + Private DNS Zone
-- [ ] **Módulo 05** — Application Gateways (um por ambiente)
-- [ ] **Módulo 06** — Monitoramento
+- [x] **Módulo 05** — Application Gateways (4 gateways — dev, qaa, qab, cert)
+- [x] **Módulo 06** — Monitoramento (Log Analytics + App Insights + Alert)
 
 ---
 
