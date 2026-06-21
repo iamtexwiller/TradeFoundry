@@ -10,9 +10,5 @@ terraform {
       source  = "hashicorp/helm"
       version = "~> 2.16"
     }
-    cloudflare = {
-      source  = "cloudflare/cloudflare"
-      version = "~> 4.45"
-    }
   }
 }

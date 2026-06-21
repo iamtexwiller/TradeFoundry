@@ -6,13 +6,5 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.33"
     }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.16"
-    }
-    grafana = {
-      source  = "grafana/grafana"
-      version = "~> 3.14"
-    }
   }
 }
