@@ -36,7 +36,7 @@ module "exposure" {
   count  = var.expose_via_internet ? 1 : 0
 
   environment_namespaces             = module.namespaces.namespace_names
-  domain                              = var.domain
+  domain                             = var.domain
   letsencrypt_email                  = var.letsencrypt_email
   cloudflare_account_email           = var.cloudflare_account_email
   cloudflare_api_token               = var.cloudflare_api_token

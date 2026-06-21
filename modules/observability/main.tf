@@ -85,9 +85,9 @@ resource "grafana_dashboard" "tradefoundry_overview" {
     tags  = ["tradefoundry", "terraform-managed"]
     panels = [
       {
-        id    = 1
-        title = "Pods disponíveis por ambiente"
-        type  = "timeseries"
+        id      = 1
+        title   = "Pods disponíveis por ambiente"
+        type    = "timeseries"
         gridPos = { h = 8, w = 12, x = 0, y = 0 }
         targets = [
           {
@@ -96,9 +96,9 @@ resource "grafana_dashboard" "tradefoundry_overview" {
         ]
       },
       {
-        id    = 2
-        title = "Uso de CPU por ambiente"
-        type  = "timeseries"
+        id      = 2
+        title   = "Uso de CPU por ambiente"
+        type    = "timeseries"
         gridPos = { h = 8, w = 12, x = 12, y = 0 }
         targets = [
           {
@@ -107,9 +107,9 @@ resource "grafana_dashboard" "tradefoundry_overview" {
         ]
       },
       {
-        id    = 3
-        title = "Nodes do cluster (status)"
-        type  = "stat"
+        id      = 3
+        title   = "Nodes do cluster (status)"
+        type    = "stat"
         gridPos = { h = 6, w = 24, x = 0, y = 8 }
         targets = [
           {
