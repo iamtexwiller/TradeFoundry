@@ -1,0 +1,10 @@
+variable "environment_namespaces" {
+  description = "Mapa ambiente -> nome completo do namespace"
+  type        = map(string)
+}
+
+variable "ingress_chart_version" {
+  description = "Versão do chart Helm do ingress-nginx"
+  type        = string
+  default     = "4.11.3"
+}

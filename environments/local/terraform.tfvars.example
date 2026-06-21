@@ -1,0 +1,35 @@
+# Copie este arquivo para terraform.tfvars e preencha com seus valores reais.
+# terraform.tfvars NUNCA deve ser commitado (já está no .gitignore).
+
+kubeconfig_path = "~/.kube/config"
+kube_context    = "minikube"
+
+# Obtenha esses valores no painel do Grafana Cloud:
+# Connections > Connect data > Hosted Prometheus metrics > Details
+grafana_cloud_url                         = "https://<seu-stack>.grafana.net"
+grafana_cloud_api_key                     = "<sua-api-key-com-permissao-admin>"
+grafana_cloud_prometheus_remote_write_url = "https://<endpoint>/api/prom/push"
+grafana_cloud_prometheus_username         = "<seu-instance-id>"
+grafana_prometheus_datasource_uid         = "<uid-do-datasource-prometheus>"
+
+# --- Exposição via internet (opcional) ---
+# Deixe expose_via_internet = false para rodar 100% local, sem precisar
+# preencher nada abaixo. Mude para true só quando quiser expor de fato
+# via tradefoundry.dev.br usando Cloudflare Tunnel + TLS real.
+expose_via_internet = false
+
+# domain                              = "tradefoundry.dev.br"
+# letsencrypt_email                  = "seu-email@exemplo.com"
+# cloudflare_account_email           = "seu-email-cloudflare@exemplo.com"
+#
+# Crie em: Cloudflare dashboard > My Profile > API Tokens > Create Token
+# Permissão necessária: Zone > DNS > Edit (escopo: zona tradefoundry.dev.br)
+# cloudflare_api_token                = "<seu-api-token>"
+#
+# Encontre em: Cloudflare dashboard > domínio tradefoundry.dev.br > Overview (barra lateral direita)
+# cloudflare_zone_id                  = "<zone-id>"
+#
+# Gere com: cloudflared tunnel login && cloudflared tunnel create tradefoundry
+# cloudflare_tunnel_id                = "<tunnel-id>"
+# cloudflare_tunnel_credentials_json  = "<conteúdo do arquivo .cloudflared/<tunnel-id>.json, em uma linha>"
+
