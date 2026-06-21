@@ -10,7 +10,7 @@
 [![GitHub Actions](https://img.shields.io/badge/CI/CD-GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/iamtexwiller/TradeFoundry/actions)
 [![Custo](https://img.shields.io/badge/Custo-Zero-success?style=for-the-badge)](#-fase-2--reconstru%C3%A7%C3%A3o-local-custo-zero)
 
-[💡 Contexto](#-contexto) · [🏛️ Fase 1 — Azure](#%EF%B8%8F-fase-1--implementa%C3%A7%C3%A3o-original-em-azure-descontinuada) · [🏗️ Fase 2 — Local](#%EF%B8%8F-fase-2--reconstru%C3%A7%C3%A3o-local-custo-zero) · [🌍 Exposição real](#-exposi%C3%A7%C3%A3o-real-via-internet-tradefoundrydevbr) · [🚀 Como rodar](#-como-rodar) · [🔍 Decisões técnicas](#-decis%C3%B5es-t%C3%A9cnicas) · [🗺️ Roadmap](#%EF%B8%8F-roadmap)
+[💡 Contexto](#-contexto) · [🏛️ Fase 1 — Azure](#%EF%B8%8F-fase-1--implementa%C3%A7%C3%A3o-original-em-azure-descontinuada) · [🏗️ Fase 2 — Local](#%EF%B8%8F-fase-2--reconstru%C3%A7%C3%A3o-local-custo-zero) · [🌍 Exposição real](#-exposi%C3%A7%C3%A3o-real-via-internet-tradefoundrydevbr) · [🚀 Como rodar](#-como-rodar) · [🐛 Dificuldades](#-dificuldades-encontradas-e-como-foram-resolvidas) · [🔍 Decisões técnicas](#-decis%C3%B5es-t%C3%A9cnicas) · [🗺️ Roadmap](#%EF%B8%8F-roadmap)
 
 ---
 
@@ -70,7 +70,7 @@ flowchart TD
 
 Essa implementação está preservada (read-only) na branch [`fase-1-azure`](#) e seu código-fonte Terraform original permanece documentado para referência. **Foi desativada quando os créditos Azure se esgotaram** — não por falha de design.
 
-> Se você está avaliando este projeto para uma vaga de Cloud/Platform Engineering: a Fase 1 demonstra a capacidade de operar isolamento de rede real (private endpoints, peering, bastion hosts). A Fase 2 demonstra a capacidade de tomar decisões de trade-off conscientes quando o orçamento é zero — uma habilidade igualmente real no dia a dia de operação.
+> A Fase 1 demonstra a capacidade de operar isolamento de rede real (private endpoints, peering, bastion hosts). A Fase 2 demonstra a capacidade de tomar decisões de trade-off conscientes quando o orçamento é zero — uma habilidade igualmente real no dia a dia de operação.
 
 ---
 
@@ -236,6 +236,40 @@ terraform apply -var-file=environments/local/terraform.tfvars
 
 ---
 
+## 🐛 Dificuldades encontradas (e como foram resolvidas)
+
+Nenhum `terraform apply` sai perfeito na primeira tentativa — e documentar os problemas reais encontrados é, na prática, mais valioso para portfólio do que fingir que tudo funcionou de primeira. Esta seção registra os obstáculos enfrentados durante a construção e validação deste projeto.
+
+### 1. Provider resolvido com namespace errado (`hashicorp/grafana` em vez de `grafana/grafana`)
+
+`terraform init` falhava ao tentar resolver `hashicorp/grafana` e `hashicorp/cloudflare` — providers que não existem nesse namespace. A causa: módulos filhos que usam um provider de terceiros precisam declarar seu **próprio** bloco `required_providers` com `source`, mesmo que o módulo raiz já declare o mesmo provider corretamente. Sem isso, o Terraform assume o namespace padrão `hashicorp/*` *para aquele módulo especificamente*. Corrigido adicionando um `providers.tf` em cada módulo (`namespaces`, `ingress`, `workload-demo`, `observability`, `exposure`) com `required_version` e `version` explícitos.
+
+### 2. Validação de token do provider Cloudflare disparada mesmo com o módulo desligado
+
+Com `expose_via_internet = false` e o módulo `exposure` usando `count = 0`, o provider Cloudflare ainda assim exigia um `api_token` válido — o Terraform inicializa **todos os providers declarados no `providers.tf` raiz**, independentemente de `count` em módulos. A mensagem de erro ("API tokens must only contain characters a-z, A-Z, 0-9, hyphens and underscores") também era enganosa: o problema real, [documentado em uma issue pública do provider desde 2022](https://github.com/cloudflare/terraform-provider-cloudflare/issues/1966) e ainda presente, é que o provider exige um token de **exatamente 40 caracteres** — qualquer valor com tamanho diferente dispara essa mesma mensagem sobre caracteres, mesmo quando os caracteres em si são válidos. Corrigido com um placeholder padrão de 40 caracteres alfanuméricos como `default` da variável.
+
+### 3. Dependência circular entre o Helm release e o Secret de credenciais
+
+O `helm_release.kube_prometheus_stack` usava `create_namespace = true` para criar o namespace `monitoring`, mas seu próprio `values.yaml` referenciava um `kubernetes_secret` que precisava existir *dentro* desse namespace. O Terraform tentava criar o Secret antes do namespace existir, gerando `namespaces "monitoring" not found`. Corrigido criando o namespace como um recurso `kubernetes_namespace` explícito e independente, com o Secret e o Helm release referenciando-o via `depends_on`, eliminando a circularidade.
+
+### 4. Conflito entre o addon nativo do Minikube e o Ingress gerenciado via Helm
+
+O `minikube addons enable ingress` instala seu próprio NGINX Ingress Controller, fora do controle do Terraform. Quando o `helm_release.nginx_ingress` tentou instalar o mesmo controller via Helm, encontrou um `ServiceAccount` já existente sem a ownership esperada pelo Helm (`invalid ownership metadata`). Corrigido desabilitando o addon nativo (`minikube addons disable ingress`) e deixando o Terraform ser a única fonte de verdade para o Ingress Controller.
+
+### 5. Dois tokens do Grafana Cloud com escopos diferentes, mesma variável
+
+O token gerado na tela "Hosted Prometheus metrics" (prefixo `glc_...`) tem permissão apenas de **escrita de métricas** — suficiente para o `remote_write` do Prometheus, mas insuficiente para o provider Terraform do Grafana, que fala com a API HTTP de administração para criar `grafana_dashboard`, `grafana_folder` e `grafana_rule_group`. Usar esse token para ambos os propósitos resultava em `401 Invalid API key` ao criar dashboards e folders. Corrigido separando em duas variáveis: `grafana_cloud_prometheus_password` (o token `glc_...`, usado só no Secret do remote_write) e `grafana_cloud_api_key` (um token de **Service Account** com role Admin, prefixo `glsa_...`, usado pelo provider Grafana).
+
+### 6. `minikube tunnel` resetando conexões com múltiplos Ingress simultâneos
+
+Com três `Ingress` resources ativos ao mesmo tempo (dev/cert/prod), o `minikube tunnel` (driver `docker`, macOS) aceitava a conexão TCP na porta 80 mas resetava a requisição HTTP no meio (`Recv failure: Connection reset by peer`) — um comportamento conhecido do driver `docker` nesse cenário. Isolado o problema testando o Ingress Controller diretamente via `kubectl port-forward`, que funcionou de imediato nos três ambientes. `port-forward` passou a ser o método de acesso local padrão do projeto (ver `scripts/port-forward.sh`), com o `minikube tunnel` descartado.
+
+### 7. `tflint` quebrando o CI por warnings, não erros
+
+O workflow `terraform-validate.yml` falhava com `exit code 2` mesmo sem nenhum erro real de configuração — o `tflint` retorna código de saída não-zero ao encontrar **warnings**, e o workflow não tinha tolerância configurada para isso. As 15 ocorrências eram todas do mesmo padrão: módulos sem `required_version` e sem `version` constraint nos seus `required_providers`. Resolvido adicionando esses dois itens em todos os `providers.tf` dos módulos (ver item 1).
+
+---
+
 ## 🔍 Decisões técnicas
 
 ### Por que remover o Jump VM e o Azure Bastion na versão local?
@@ -275,8 +309,9 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] **Módulo** — Workload de demonstração (app + healthz)
 - [x] **Módulo** — Observabilidade (kube-prometheus-stack + Grafana Cloud)
 - [x] **Módulo** — Exposição via internet (Cloudflare Tunnel + cert-manager DNS-01, opt-in)
-- [ ] Validação completa `terraform apply` em ambiente real
-- [ ] Screenshots do dashboard Grafana Cloud em funcionamento
+- [x] Validação completa `terraform apply` em ambiente real
+- [x] Screenshots do dashboard Grafana Cloud em funcionamento
+- [x] CI/CD (`terraform fmt`, `validate`, `tflint`) passando sem warnings
 - [ ] Validação ponta a ponta de `https://dev.tradefoundry.dev.br` com certificado válido
 - [ ] Testes automatizados de smoke test pós-deploy (GitHub Actions)
 
