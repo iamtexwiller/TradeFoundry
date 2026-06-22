@@ -178,6 +178,8 @@ Depois disso, os três ambientes ficam acessíveis publicamente:
 - `https://cert.tradefoundry.dev.br`
 - `https://prod.tradefoundry.dev.br`
 
+> ✅ **Validado em produção (deste projeto):** os três hosts acima respondem `HTTP/2 200` com certificado TLS válido, servidos via Cloudflare (datacenter GRU — São Paulo), com o túnel `cloudflared` mantendo 4 conexões QUIC simultâneas e 100% de saúde no pre-check de conectividade.
+
 ---
 
 ## 📋 Estrutura do projeto
@@ -268,6 +270,23 @@ Com três `Ingress` resources ativos ao mesmo tempo (dev/cert/prod), o `minikube
 
 O workflow `terraform-validate.yml` falhava com `exit code 2` mesmo sem nenhum erro real de configuração — o `tflint` retorna código de saída não-zero ao encontrar **warnings**, e o workflow não tinha tolerância configurada para isso. As 15 ocorrências eram todas do mesmo padrão: módulos sem `required_version` e sem `version` constraint nos seus `required_providers`. Resolvido adicionando esses dois itens em todos os `providers.tf` dos módulos (ver item 1).
 
+### 8. `kubernetes_manifest` validando CRDs que ainda não existem no `plan`
+
+Ao provisionar o `ClusterIssuer` e o `Certificate` do cert-manager via `kubernetes_manifest`, o `terraform plan` falhava com `API did not recognize GroupVersionKind from manifest (CRD may not be installed)`. A causa: esse recurso faz uma chamada real à API do Kubernetes para validar o schema do manifesto **já durante o `plan`**, mas o CRD do cert-manager só existe no cluster depois que o `helm_release.cert_manager` roda de fato no `apply` — uma dependência que o Terraform não consegue resolver sozinho nesse tipo de recurso. Corrigido substituindo por `kubectl_manifest` (provider `gavinbunney/kubectl`), que aplica o YAML sem essa validação prematura de schema.
+
+### 9. Chart Helm oficial da Cloudflare incompatível com o fluxo de autenticação via CLI
+
+A primeira tentativa de instalar o `cloudflared` usou o chart oficial `cloudflare/cloudflare-tunnel-remote`, mas esse chart espera um **`TUNNEL_TOKEN`** — um token gerado pelo dashboard Zero Trust da Cloudflare — enquanto o fluxo usado neste projeto (`cloudflared tunnel login` + `cloudflared tunnel create`, via CLI) gera um `credentials.json`, formato incompatível com esse chart. Além disso, a versão de chart inicialmente especificada (`0.2.0`) nem existia no repositório. Corrigido trocando para o chart da comunidade `community-charts/cloudflared`, desenhado especificamente para aceitar credenciais geradas via CLI.
+
+### 10. Estrutura de secrets do chart `community-charts/cloudflared` exigindo três tentativas
+
+Mesmo com o chart correto, a estrutura de `values` passou por três iterações até funcionar:
+1. Passar o nome do Secret como string simples (`existingConfigJsonFileSecret = "nome-do-secret"`) falhou — o template espera um objeto `{ name = "..." }`, não uma string.
+2. Corrigida a estrutura para `{ name = ... }`, mas faltava um segundo Secret obrigatório: o certificado de origem (`cert.pem`, gerado por `cloudflared tunnel login` — arquivo diferente do `credentials.json`, gerado por `cloudflared tunnel create`). O chart rejeitava a instalação pedindo esse arquivo em base64.
+3. Mesmo referenciando os dois Secrets via `existingConfigJsonFileSecret`/`existingPemFileSecret`, o template continuava falhando com a mesma mensagem de "base64 required" — sinal de que essa via não estava sendo reconhecida corretamente nesta versão do chart. Resolvido definitivamente usando a forma alternativa documentada pelo próprio chart, `base64EncodedConfigJsonFile`/`base64EncodedPemFile`, com a codificação feita pela função nativa `base64encode()` do Terraform a partir das variáveis já existentes — eliminando a necessidade de gerenciar Secrets do Kubernetes separados para esse propósito.
+
+Após essa correção, o túnel conectou de imediato (4 conexões QUIC registradas, pre-check de conectividade 100% saudável), e os três ambientes (`dev`, `cert`, `prod`) responderam `HTTP/2 200` via `https://*.tradefoundry.dev.br`, com certificado TLS válido.
+
 ---
 
 ## 🔍 Decisões técnicas
@@ -312,7 +331,7 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] Validação completa `terraform apply` em ambiente real
 - [x] Screenshots do dashboard Grafana Cloud em funcionamento
 - [x] CI/CD (`terraform fmt`, `validate`, `tflint`) passando sem warnings
-- [ ] Validação ponta a ponta de `https://dev.tradefoundry.dev.br` com certificado válido
+- [x] Validação ponta a ponta de `https://dev.tradefoundry.dev.br`, `cert.` e `prod.` com certificado TLS válido
 - [ ] Testes automatizados de smoke test pós-deploy (GitHub Actions)
 
 ---
