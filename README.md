@@ -287,6 +287,32 @@ Mesmo com o chart correto, a estrutura de `values` passou por três iterações 
 
 Após essa correção, o túnel conectou de imediato (4 conexões QUIC registradas, pre-check de conectividade 100% saudável), e os três ambientes (`dev`, `cert`, `prod`) responderam `HTTP/2 200` via `https://*.tradefoundry.dev.br`, com certificado TLS válido.
 
+### 11. `kube-prometheus-stack` ultrapassando o limite de active series do Grafana Cloud Free tier
+
+Algumas semanas após o deploy inicial, a Grafana notificou por e-mail que a conta havia atingido **10,6 mil de 10 mil séries ativas** incluídas no Free tier — o limite havia sido excedido. O painel de **Billing/Usage** confirmou que 100% do consumo era de métricas (todas as outras categorias — logs, traces, synthetics — estavam zeradas), isolando a causa ao Prometheus.
+
+**Causa raiz:** o `kube-prometheus-stack` coleta, por padrão, métricas detalhadas de **todos** os componentes do cluster — etcd, scheduler, kubelet completo, cAdvisor (métricas de container granulares), e o `kube-state-metrics` inteiro — independentemente de quais métricas o projeto de fato consome. O dashboard e o alerta deste projeto usam só três métricas (`kube_pod_status_ready`, `container_cpu_usage_seconds_total`, `kube_node_status_condition`), mas o `remote_write` estava enviando *todas* as séries coletadas pelo stack, não apenas essas três.
+
+**Correção** — filtro por allowlist via `writeRelabelConfigs`, aplicado na configuração do `remote_write` do Prometheus, descartando qualquer métrica fora da lista permitida antes de saber do cluster:
+
+```hcl
+remoteWrite = [
+  {
+    url = var.grafana_cloud_prometheus_remote_write_url
+    basicAuth = { ... }
+    writeRelabelConfigs = [
+      {
+        sourceLabels = ["__name__"]
+        regex        = "kube_pod_status_ready|container_cpu_usage_seconds_total|kube_node_status_condition"
+        action       = "keep"
+      }
+    ]
+  }
+]
+```
+
+Essa abordagem resolve o problema na origem — as métricas não usadas nunca saem do cluster e, portanto, nunca contam contra o limite de active series do plano gratuito, independente de quanto o `kube-prometheus-stack` colete internamente.
+
 ---
 
 ## 🔍 Decisões técnicas
