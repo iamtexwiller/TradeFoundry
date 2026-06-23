@@ -364,6 +364,21 @@ GET https://prod.tradefoundry.dev.br/health  → 200 OK
 {"message": "Ambiente PROD - Status: UP"}
 ```
 
+### 13. Label `container` ausente filtrando fora a única série disponível
+
+Ao expandir o dashboard com métricas de memória e restarts, o painel "Uso de memória por ambiente" retornou `No data`, enquanto "Restarts de pods" populou normalmente após a propagação esperada do `remote_write`.
+
+**Diagnóstico:** consultando o Prometheus local diretamente (via `port-forward` na porta 9090, sem passar pelo Grafana Cloud), a métrica `container_memory_working_set_bytes` existia e tinha valores reais — mas a série retornada **não tinha o label `container`** (diferente de `kube_pod_container_status_restarts_total`, que tinha `container="nginx"` normalmente). A query do dashboard usava `container!=""` como filtro, assumindo que esse label sempre estaria presente — mas quando o label está **ausente** (não apenas vazio), esse tipo de comparação em PromQL pode excluir a série, já que ela representa uma métrica agregada por pod inteiro do cAdvisor, não por container individual.
+
+**Correção** — remoção do filtro `container!=""`, já que ele não se aplicava à forma como essa métrica específica é exposta:
+
+```diff
+- sum(container_memory_working_set_bytes{namespace=~"tradefoundry-.*", container!=""}) by (namespace)
++ sum(container_memory_working_set_bytes{namespace=~"tradefoundry-.*"}) by (namespace)
+```
+
+Esse caso reforça a importância de **validar a query direto na fonte (Prometheus local)** antes de assumir que um `No data` no Grafana Cloud é só atraso de propagação — duas causas com sintoma idêntico na superfície, mas diagnóstico totalmente diferente.
+
 ---
 
 ## 🔍 Decisões técnicas
