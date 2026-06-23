@@ -193,7 +193,7 @@ TradeFoundry/
 ├── modules/
 │   ├── namespaces/                # dev, cert, prod + ResourceQuota
 │   ├── ingress/                   # NGINX Ingress Controller (Helm) + Ingress por ambiente
-│   ├── workload-demo/             # App de demonstração (nginx + /healthz) para gerar métricas reais
+│   ├── workload-demo/             # App de demonstração (nginx + /health) para gerar métricas reais
 │   ├── observability/             # kube-prometheus-stack + dashboard/alerta via Grafana provider
 │   └── exposure/                  # [opcional] Cloudflare Tunnel + cert-manager (DNS-01) — tradefoundry.dev.br
 ├── environments/
@@ -313,6 +313,57 @@ remoteWrite = [
 
 Essa abordagem resolve o problema na origem — as métricas não usadas nunca saem do cluster e, portanto, nunca contam contra o limite de active series do plano gratuito, independente de quanto o `kube-prometheus-stack` colete internamente.
 
+### 12. Ingress não reconhecendo o `Host` público enviado pelo Cloudflare Tunnel
+
+Ao trocar a rota de health check de uma página HTML (`/healthz`) para uma resposta JSON mais simples (`/health`), os três ambientes voltaram a retornar 404 — mas só via `tradefoundry.dev.br`; localmente (`*.tradefoundry.local`), tudo funcionava.
+
+**Diagnóstico, camada por camada:**
+1. Pod: `wget` de dentro do próprio container retornou `200` com o JSON correto — pod saudável.
+2. Service/Endpoint: `port-forward` direto no Service também retornou `200` — Service saudável.
+3. Ingress Controller via `port-forward`, usando `Host: dev.tradefoundry.local`: `200` — Ingress saudável para o host local.
+4. O mesmo teste, mas com `Host: dev.tradefoundry.dev.br` (o host real que o domínio público usa): **404**.
+
+**Causa raiz:** o recurso `Ingress` só tinha uma única `rule`, com `host = "${ambiente}.tradefoundry.local"`. O `cloudflared` encaminha a requisição com o `Host` header do domínio público (`dev.tradefoundry.dev.br`), que o Ingress nunca foi configurado para reconhecer — resultando no 404 padrão do nginx, apesar de toda a cadeia interna (pod, Service) estar saudável.
+
+**Correção** — adicionada uma segunda `rule` dinâmica no Ingress, condicionada à variável `public_domain` (vazia quando `expose_via_internet = false`, preenchida com o domínio real quando ativado):
+
+```hcl
+dynamic "rule" {
+  for_each = var.public_domain != "" ? [var.public_domain] : []
+
+  content {
+    host = "${each.key}.${rule.value}"
+    http {
+      path {
+        path      = "/"
+        path_type = "Prefix"
+        backend {
+          service {
+            name = "tradefoundry-app-${each.key}"
+            port { number = 80 }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Esse caso reforça um padrão de debugging útil: quando algo funciona localmente mas falha via domínio público, isolar cada camada da cadeia (pod → Service → Ingress) com o `Host` header exato usado em cada contexto revela exatamente onde a divergência está — em vez de assumir que o problema está em algo "mais exótico" como o túnel ou o DNS.
+
+**Validação final** — os três ambientes respondendo corretamente:
+
+```json
+GET https://dev.tradefoundry.dev.br/health   → 200 OK
+{"message": "Ambiente DEV - Status: UP"}
+
+GET https://cert.tradefoundry.dev.br/health  → 200 OK
+{"message": "Ambiente CERT - Status: UP"}
+
+GET https://prod.tradefoundry.dev.br/health  → 200 OK
+{"message": "Ambiente PROD - Status: UP"}
+```
+
 ---
 
 ## 🔍 Decisões técnicas
@@ -351,7 +402,7 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] Fase 2 — Definição da arquitetura local
 - [x] **Módulo** — Namespaces (dev/cert/prod) + ResourceQuota
 - [x] **Módulo** — Ingress (NGINX via Helm)
-- [x] **Módulo** — Workload de demonstração (app + healthz)
+- [x] **Módulo** — Workload de demonstração (app + health)
 - [x] **Módulo** — Observabilidade (kube-prometheus-stack + Grafana Cloud)
 - [x] **Módulo** — Exposição via internet (Cloudflare Tunnel + cert-manager DNS-01, opt-in)
 - [x] Validação completa `terraform apply` em ambiente real
