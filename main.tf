@@ -6,6 +6,7 @@ module "ingress" {
   source = "./modules/ingress"
 
   environment_namespaces = module.namespaces.namespace_names
+  public_domain          = var.expose_via_internet ? var.domain : ""
 
   depends_on = [module.namespaces]
 }
@@ -43,6 +44,27 @@ module "exposure" {
   cloudflare_zone_id                 = var.cloudflare_zone_id
   cloudflare_tunnel_id               = var.cloudflare_tunnel_id
   cloudflare_tunnel_credentials_json = var.cloudflare_tunnel_credentials_json
+  cloudflare_origin_cert_pem         = var.cloudflare_origin_cert_pem
 
   depends_on = [module.namespaces, module.ingress]
+}
+
+# Módulo opcional — só provisiona checks de Synthetic Monitoring quando
+# enable_synthetic_monitoring = true. Os checks testam o domínio público,
+# então só fazem sentido com expose_via_internet = true também.
+module "synthetic_monitoring" {
+  source = "./modules/synthetic-monitoring"
+  count  = var.enable_synthetic_monitoring ? 1 : 0
+
+  # Módulos com count que usam um provider com alias (não o default) precisam
+  # receber esse provider explicitamente — não basta o módulo filho referenciar
+  # "grafana.sm" internamente.
+  providers = {
+    grafana.sm = grafana.sm
+  }
+
+  environment_namespaces = module.namespaces.namespace_names
+  domain                 = var.domain
+
+  depends_on = [module.exposure]
 }

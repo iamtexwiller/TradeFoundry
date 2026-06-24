@@ -39,8 +39,8 @@ resource "kubernetes_secret" "cloudflare_api_token" {
   depends_on = [helm_release.cert_manager]
 }
 
-resource "kubernetes_manifest" "cluster_issuer" {
-  manifest = {
+resource "kubectl_manifest" "cluster_issuer" {
+  yaml_body = yamlencode({
     apiVersion = "cert-manager.io/v1"
     kind       = "ClusterIssuer"
     metadata = {
@@ -68,14 +68,17 @@ resource "kubernetes_manifest" "cluster_issuer" {
         ]
       }
     }
-  }
+  })
 
+  # kubectl_manifest (em vez de kubernetes_manifest) evita que o Terraform
+  # valide o schema do CRD durante o "plan" — o CRD do cert-manager só existe
+  # no cluster depois que o helm_release.cert_manager roda de fato no "apply".
   depends_on = [helm_release.cert_manager, kubernetes_secret.cloudflare_api_token]
 }
 
 # Certificado único, válido para os três subdomínios de ambiente.
-resource "kubernetes_manifest" "tradefoundry_certificate" {
-  manifest = {
+resource "kubectl_manifest" "tradefoundry_certificate" {
+  yaml_body = yamlencode({
     apiVersion = "cert-manager.io/v1"
     kind       = "Certificate"
     metadata = {
@@ -85,7 +88,7 @@ resource "kubernetes_manifest" "tradefoundry_certificate" {
     spec = {
       secretName = "tradefoundry-tls-secret"
       issuerRef = {
-        name = kubernetes_manifest.cluster_issuer.manifest.metadata.name
+        name = "letsencrypt-dns01"
         kind = "ClusterIssuer"
       }
       dnsNames = [
@@ -93,34 +96,43 @@ resource "kubernetes_manifest" "tradefoundry_certificate" {
         "${env}.${var.domain}"
       ]
     }
-  }
+  })
 
-  depends_on = [kubernetes_manifest.cluster_issuer]
+  depends_on = [kubectl_manifest.cluster_issuer]
 }
 
 # cloudflared — túnel outbound. Cada hostname é roteado para o Service do
 # Ingress NGINX dentro do cluster (resolução interna via DNS do Kubernetes).
-resource "kubernetes_secret" "cloudflared_credentials" {
-  metadata {
-    name      = "cloudflared-credentials"
-    namespace = "default"
-  }
+#
+# Usamos o chart "community-charts/cloudflared" em vez do oficial
+# "cloudflare/cloudflare-tunnel-remote" porque este último exige um
+# TUNNEL_TOKEN (token de túnel gerenciado pelo dashboard da Cloudflare),
+# diferente do credentials.json gerado via "cloudflared tunnel create"
+# (fluxo via CLI, que é o que usamos aqui).
+#
+# Usamos tunnelSecrets.base64EncodedConfigJsonFile / base64EncodedPemFile
+# (em vez de existingConfigJsonFileSecret / existingPemFileSecret) porque
+# essa é a forma documentada e testada de forma consistente em todas as
+# fontes oficiais do chart nesta versão; a alternativa via Secret existente
+# não foi reconhecida corretamente pelo template nos testes realizados.
+# O conteúdo fica visível via "helm get values" dentro do cluster local —
+# risco aceitável aqui, já que o release nunca é exposto fora do cluster.
+resource "helm_release" "cloudflared" {
+  name       = "cloudflared"
+  repository = "https://community-charts.github.io/helm-charts"
+  chart      = "cloudflared"
+  namespace  = "default"
+  version    = var.cloudflared_chart_version
 
-  data = {
-    "credentials.json" = var.cloudflare_tunnel_credentials_json
-  }
-}
-
-resource "kubernetes_config_map" "cloudflared_config" {
-  metadata {
-    name      = "cloudflared-config"
-    namespace = "default"
-  }
-
-  data = {
-    "config.yaml" = yamlencode({
-      tunnel           = var.cloudflare_tunnel_id
-      credentials-file = "/etc/cloudflared/creds/credentials.json"
+  values = [
+    yamlencode({
+      tunnelConfig = {
+        name = "tradefoundry"
+      }
+      tunnelSecrets = {
+        base64EncodedConfigJsonFile = base64encode(var.cloudflare_tunnel_credentials_json)
+        base64EncodedPemFile        = base64encode(var.cloudflare_origin_cert_pem)
+      }
       ingress = concat(
         [
           for env in keys(var.environment_namespaces) : {
@@ -129,37 +141,9 @@ resource "kubernetes_config_map" "cloudflared_config" {
           }
         ],
         [
-          { service = "http_status:404" } # catch-all obrigatório do cloudflared
+          { service = "http_status:404" }
         ]
       )
-    })
-  }
-}
-
-resource "helm_release" "cloudflared" {
-  name       = "cloudflared"
-  repository = "https://cloudflare.github.io/helm-charts"
-  chart      = "cloudflare-tunnel-remote"
-  namespace  = "default"
-  version    = var.cloudflared_chart_version
-
-  values = [
-    yamlencode({
-      cloudflare = {
-        tunnelId = var.cloudflare_tunnel_id
-        secret   = kubernetes_secret.cloudflared_credentials.metadata[0].name
-        ingress = concat(
-          [
-            for env in keys(var.environment_namespaces) : {
-              hostname = "${env}.${var.domain}"
-              service  = "http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80"
-            }
-          ],
-          [
-            { service = "http_status:404" }
-          ]
-        )
-      }
       resources = {
         requests = {
           cpu    = "50m"
@@ -169,7 +153,6 @@ resource "helm_release" "cloudflared" {
     })
   ]
 
-  depends_on = [kubernetes_secret.cloudflared_credentials, kubernetes_config_map.cloudflared_config]
 }
 
 # Registros DNS — gerenciados como código via provider Cloudflare.

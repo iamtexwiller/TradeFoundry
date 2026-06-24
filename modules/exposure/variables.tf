@@ -18,7 +18,7 @@ variable "cert_manager_chart_version" {
 variable "cloudflared_chart_version" {
   description = "Versão do chart Helm do cloudflare-tunnel-remote"
   type        = string
-  default     = "0.2.0"
+  default     = "2.2.10"
 }
 
 variable "letsencrypt_server" {
@@ -55,6 +55,12 @@ variable "cloudflare_tunnel_id" {
 
 variable "cloudflare_tunnel_credentials_json" {
   description = "Conteúdo do arquivo credentials.json gerado ao criar o túnel"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_origin_cert_pem" {
+  description = "Conteúdo do arquivo cert.pem gerado por 'cloudflared tunnel login' (certificado de origem, diferente do credentials.json)"
   type        = string
   sensitive   = true
 }

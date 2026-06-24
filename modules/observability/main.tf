@@ -55,6 +55,20 @@ resource "helm_release" "kube_prometheus_stack" {
                   key  = "password"
                 }
               }
+              # writeRelabelConfigs com allowlist: só as métricas usadas pelo
+              # dashboard/alerta deste projeto saem do cluster. O kube-prometheus-stack
+              # coleta, por padrão, milhares de séries de métricas (etcd, scheduler,
+              # kubelet, cAdvisor completo, kube-state-metrics completo) que nunca são
+              # usadas aqui — isso sozinho ultrapassou o limite de 10k active series
+              # do Grafana Cloud Free tier. O filtro abaixo resolve na origem,
+              # evitando que métricas não usadas sejam contadas no plano gratuito.
+              writeRelabelConfigs = [
+                {
+                  sourceLabels = ["__name__"]
+                  regex        = "kube_pod_status_ready|container_cpu_usage_seconds_total|kube_node_status_condition|container_memory_working_set_bytes|kube_pod_container_status_restarts_total"
+                  action       = "keep"
+                }
+              ]
             }
           ]
           resources = {
@@ -107,10 +121,54 @@ resource "grafana_dashboard" "tradefoundry_overview" {
         ]
       },
       {
+        id      = 4
+        title   = "Uso de memória por ambiente"
+        type    = "timeseries"
+        gridPos = { h = 8, w = 12, x = 0, y = 8 }
+        targets = [
+          {
+            expr = "sum(container_memory_working_set_bytes{namespace=~\"tradefoundry-.*\"}) by (namespace)"
+          }
+        ]
+      },
+      {
+        id      = 5
+        title   = "Restarts de pods por ambiente (1h)"
+        type    = "timeseries"
+        gridPos = { h = 8, w = 12, x = 12, y = 8 }
+        targets = [
+          {
+            expr = "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"tradefoundry-.*\"}[1h])) by (namespace)"
+          }
+        ]
+      },
+      {
+        id      = 6
+        title   = "Disponibilidade pública por ambiente (Synthetic Monitoring)"
+        type    = "stat"
+        gridPos = { h = 6, w = 12, x = 0, y = 16 }
+        targets = [
+          {
+            expr = "probe_success{job=~\"tradefoundry-.*-health\"}"
+          }
+        ]
+      },
+      {
+        id      = 7
+        title   = "Latência de resposta pública (Synthetic Monitoring)"
+        type    = "timeseries"
+        gridPos = { h = 6, w = 12, x = 12, y = 16 }
+        targets = [
+          {
+            expr = "probe_http_duration_seconds{job=~\"tradefoundry-.*-health\", phase=\"connect\"}"
+          }
+        ]
+      },
+      {
         id      = 3
         title   = "Nodes do cluster (status)"
         type    = "stat"
-        gridPos = { h = 6, w = 24, x = 0, y = 8 }
+        gridPos = { h = 6, w = 24, x = 0, y = 22 }
         targets = [
           {
             expr = "sum(kube_node_status_condition{condition=\"Ready\", status=\"true\"})"

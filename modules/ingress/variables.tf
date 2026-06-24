@@ -8,3 +8,9 @@ variable "ingress_chart_version" {
   type        = string
   default     = "4.11.3"
 }
+
+variable "public_domain" {
+  description = "Domínio público para exposição via internet (ex: tradefoundry.dev.br). Vazio = só o host .local é configurado."
+  type        = string
+  default     = ""
+}

@@ -112,6 +112,10 @@ flowchart TD
     GC --> DASH["📈 Dashboard via Terraform"]
     GC --> ALERT["🚨 Alerta via Terraform"]
 
+    SM["🛰️ Synthetic Monitoring<br/>(3 checks HTTP, fora do cluster)"]
+    SM -->|testa /health a cada 15min| INT
+    SM --> GC
+
     DEV["👤 Desenvolvedor"] -->|kubectl / port-forward| MK
 ```
 
@@ -129,6 +133,20 @@ flowchart TD
 | Log Analytics + Application Insights | kube-prometheus-stack + Grafana Cloud (free tier) | Dashboard e alertas definidos via Terraform, não criados manualmente |
 | Application Gateway + IP público + certificado gerenciado | Cloudflare Tunnel + cert-manager (DNS-01) | Domínio próprio `tradefoundry.dev.br`, TLS real, sem expor porta no roteador |
 | Terraform + `azurerm` provider | Terraform + `kubernetes`, `helm`, `grafana`, `cloudflare` providers | IaC continua sendo a peça central do projeto |
+| — (não existia na Fase 1) | Grafana Cloud Synthetic Monitoring | Testa os 3 ambientes de fora do cluster (como um usuário real), a cada 15min, sem custo |
+
+### Observabilidade — visão interna + visão externa
+
+O dashboard "TradeFoundry — Visão Geral dos Ambientes" combina duas perspectivas complementares:
+
+- **Visão interna** (via `kube-prometheus-stack`) — pods disponíveis, uso de CPU, memória e restarts por ambiente, coletados de dentro do cluster.
+- **Visão externa** (via Grafana Cloud Synthetic Monitoring) — disponibilidade e latência medidas de fora do cluster, simulando o acesso real de um usuário via `https://{dev,cert,prod}.tradefoundry.dev.br/health`, a cada 15 minutos.
+
+Essa combinação detecta categorias de problema diferentes: a visão interna mostra "o pod está saudável?", enquanto a visão externa mostra "o caminho completo até o usuário está saudável?" — incluindo Ingress, Cloudflare Tunnel e DNS. Foi exatamente esse tipo de problema (roteamento de `Host` no Ingress, documentado no item 12 das dificuldades) que a visão externa teria detectado automaticamente, sem precisar de verificação manual.
+
+![Dashboard TradeFoundry no Grafana Cloud, mostrando 7 painéis: pods disponíveis, uso de CPU, uso de memória, restarts de pods, disponibilidade pública por ambiente (3 indicadores verdes mostrando "1") e latência de resposta pública](docs/dashboard-grafana-overview.png)
+
+*Dashboard real em produção (deste projeto) — métricas internas (Prometheus local) e externas (Synthetic Monitoring) lado a lado, todas definidas como código via Terraform.*
 
 ### Stack tecnológico
 
@@ -173,6 +191,14 @@ cloudflare_tunnel_credentials_json = "<conteúdo do credentials.json do túnel>"
 terraform apply -var-file=environments/local/terraform.tfvars
 ```
 
+Para ativar também o Synthetic Monitoring (requer `expose_via_internet = true`, já que os checks testam o domínio público):
+
+```hcl
+enable_synthetic_monitoring = true
+grafana_sm_access_token     = "<token gerado em Testing & synthetics > Synthetics > Config > Access tokens>"
+grafana_sm_url              = "https://synthetic-monitoring-api-sa-east-1.grafana.net"
+```
+
 Depois disso, os três ambientes ficam acessíveis publicamente:
 - `https://dev.tradefoundry.dev.br`
 - `https://cert.tradefoundry.dev.br`
@@ -195,7 +221,8 @@ TradeFoundry/
 │   ├── ingress/                   # NGINX Ingress Controller (Helm) + Ingress por ambiente
 │   ├── workload-demo/             # App de demonstração (nginx + /health) para gerar métricas reais
 │   ├── observability/             # kube-prometheus-stack + dashboard/alerta via Grafana provider
-│   └── exposure/                  # [opcional] Cloudflare Tunnel + cert-manager (DNS-01) — tradefoundry.dev.br
+│   ├── exposure/                  # [opcional] Cloudflare Tunnel + cert-manager (DNS-01) — tradefoundry.dev.br
+│   └── synthetic-monitoring/      # [opcional] Grafana Cloud Synthetic Monitoring — 3 checks HTTP externos
 ├── environments/
 │   └── local/
 │       └── terraform.tfvars.example
@@ -420,6 +447,7 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] **Módulo** — Workload de demonstração (app + health)
 - [x] **Módulo** — Observabilidade (kube-prometheus-stack + Grafana Cloud)
 - [x] **Módulo** — Exposição via internet (Cloudflare Tunnel + cert-manager DNS-01, opt-in)
+- [x] **Módulo** — Synthetic Monitoring (3 checks HTTP externos, opt-in)
 - [x] Validação completa `terraform apply` em ambiente real
 - [x] Screenshots do dashboard Grafana Cloud em funcionamento
 - [x] CI/CD (`terraform fmt`, `validate`, `tflint`) passando sem warnings

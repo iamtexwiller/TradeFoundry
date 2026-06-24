@@ -56,7 +56,7 @@ resource "kubernetes_deployment" "app" {
 
           liveness_probe {
             http_get {
-              path = "/healthz"
+              path = "/health"
               port = 8080
             }
             initial_delay_seconds = 5
@@ -65,24 +65,41 @@ resource "kubernetes_deployment" "app" {
 
           readiness_probe {
             http_get {
-              path = "/healthz"
+              path = "/health"
               port = 8080
             }
             initial_delay_seconds = 3
             period_seconds        = 5
           }
 
+          # /health é servido como JSON estático via ConfigMap. O bloco
+          # "default.conf" reescreve a config padrão do nginx para que essa
+          # rota responda com Content-Type application/json, em vez do
+          # application/octet-stream padrão para arquivos sem extensão.
           volume_mount {
-            name       = "healthz-config"
-            mount_path = "/usr/share/nginx/html/healthz"
-            sub_path   = "healthz"
+            name       = "health-page"
+            mount_path = "/usr/share/nginx/html/health.json"
+            sub_path   = "health.json"
+          }
+
+          volume_mount {
+            name       = "nginx-extra-config"
+            mount_path = "/etc/nginx/conf.d/default.conf"
+            sub_path   = "default.conf"
           }
         }
 
         volume {
-          name = "healthz-config"
+          name = "health-page"
           config_map {
-            name = kubernetes_config_map.healthz[each.key].metadata[0].name
+            name = kubernetes_config_map.health[each.key].metadata[0].name
+          }
+        }
+
+        volume {
+          name = "nginx-extra-config"
+          config_map {
+            name = kubernetes_config_map.nginx_extra_config[each.key].metadata[0].name
           }
         }
       }
@@ -90,16 +107,55 @@ resource "kubernetes_deployment" "app" {
   }
 }
 
-resource "kubernetes_config_map" "healthz" {
+# JSON simples servido em /health — substitui a versão anterior em HTML,
+# que apresentou comportamento inconsistente via HTTP/2 (corpo vazio em
+# alguns clientes/caminhos). JSON é mais previsível de servir e de validar.
+resource "kubernetes_config_map" "health" {
   for_each = var.environment_namespaces
 
   metadata {
-    name      = "tradefoundry-healthz-${each.key}"
+    name      = "tradefoundry-health-${each.key}"
     namespace = each.value
   }
 
   data = {
-    healthz = "ok"
+    "health.json" = jsonencode({
+      message = "Ambiente ${upper(each.key)} - Status: UP"
+    })
+  }
+}
+
+# Substitui o default.conf inteiro da imagem nginx-unprivileged, incluindo
+# o bloco "server" — um bloco "location" não pode existir sozinho dentro de
+# /etc/nginx/conf.d/ (precisa estar dentro de um "server {}"), por isso não
+# basta adicionar um .conf extra: é necessário substituir o arquivo principal.
+# Criado por ambiente porque ConfigMaps são recursos namespaced — cada
+# Deployment só pode montar um ConfigMap do seu próprio namespace.
+resource "kubernetes_config_map" "nginx_extra_config" {
+  for_each = var.environment_namespaces
+
+  metadata {
+    name      = "tradefoundry-nginx-extra-config"
+    namespace = each.value
+  }
+
+  data = {
+    "default.conf" = <<-EOT
+      server {
+        listen 8080;
+        server_name _;
+
+        location = /health {
+          default_type application/json;
+          alias /usr/share/nginx/html/health.json;
+        }
+
+        location / {
+          root /usr/share/nginx/html;
+          index index.html;
+        }
+      }
+    EOT
   }
 }
 

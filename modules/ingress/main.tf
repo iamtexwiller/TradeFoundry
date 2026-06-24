@@ -58,6 +58,34 @@ resource "kubernetes_ingress_v1" "environment_ingress" {
         }
       }
     }
+
+    # Regra adicional para o domínio público (ex: dev.tradefoundry.dev.br).
+    # Sem isso, o cloudflared envia o Host real do domínio público, que o
+    # Ingress não reconhece (só conhecia o host .tradefoundry.local) — isso
+    # fazia o nginx cair no 404 padrão mesmo com o pod/Service saudáveis.
+    dynamic "rule" {
+      for_each = var.public_domain != "" ? [var.public_domain] : []
+
+      content {
+        host = "${each.key}.${rule.value}"
+
+        http {
+          path {
+            path      = "/"
+            path_type = "Prefix"
+
+            backend {
+              service {
+                name = "tradefoundry-app-${each.key}"
+                port {
+                  number = 80
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   depends_on = [helm_release.nginx_ingress]

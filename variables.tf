@@ -44,6 +44,27 @@ variable "grafana_prometheus_datasource_uid" {
   type        = string
 }
 
+# --- Synthetic Monitoring (opcional) ---
+
+variable "enable_synthetic_monitoring" {
+  description = "Se true, provisiona checks HTTP públicos via Grafana Synthetic Monitoring para os 3 ambientes. Requer expose_via_internet = true (os checks testam o domínio público)."
+  type        = bool
+  default     = false
+}
+
+variable "grafana_sm_access_token" {
+  description = "Token de acesso do Synthetic Monitoring — gerado em Testing & synthetics > Synthetics > Config > Access tokens. DIFERENTE do grafana_cloud_api_key."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "grafana_sm_url" {
+  description = "URL da API de Synthetic Monitoring para a região do seu stack (ex: https://synthetic-monitoring-api-sa-east-1.grafana.net). Visível na mesma tela onde o token é gerado."
+  type        = string
+  default     = "https://synthetic-monitoring-api-sa-east-1.grafana.net"
+}
+
 # --- Exposição via internet (Cloudflare Tunnel + cert-manager) ---
 
 variable "expose_via_internet" {
@@ -91,6 +112,13 @@ variable "cloudflare_tunnel_id" {
 
 variable "cloudflare_tunnel_credentials_json" {
   description = "Conteúdo do credentials.json gerado ao criar o túnel Cloudflare"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "cloudflare_origin_cert_pem" {
+  description = "Conteúdo do cert.pem gerado por 'cloudflared tunnel login' (certificado de origem)"
   type        = string
   sensitive   = true
   default     = ""
