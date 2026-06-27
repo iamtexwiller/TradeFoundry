@@ -453,6 +453,37 @@ resource "kubernetes_deployment" "app" {
 
 **Lição:** ao usar a tag `latest` (ou qualquer tag mutável) em ambiente de desenvolvimento local, declarar `image_pull_policy = "Always"` explicitamente evita depender do comportamento implícito do provider/versão do Kubernetes — sem isso, "fiz o build, publiquei, reiniciei o pod" pode silenciosamente continuar servindo uma versão antiga.
 
+### 16. Sinal de igual (`=`) literal nas expressões do node Redis (n8n)
+
+Depois de montar o workflow no n8n (Schedule Trigger → HTTP Request na brapi.dev → Code para formatar → Redis para gravar), a execução completou com sucesso (todos os nodes com check verde, "4 items" gravados), mas a API continuava retornando `"source": "simulated"` — nunca lia o dado real do Redis.
+
+**Diagnóstico:**
+```bash
+kubectl exec -it -n n8n deployment/n8n-redis -- redis-cli KEYS "*"
+# Retornou: "=quote:PETR4", "=quote:VALE3", ... (com "=" literal no início)
+```
+
+**Causa raiz:** no campo "Key" do node Redis, o valor foi digitado como `=quote:{{ $json.ticker }}` diretamente no campo de texto simples, em vez de usar o modo de expressão do n8n (ativado pelo ícone `fx` ao lado do campo). O `=` é a sintaxe **interna** que o n8n usa para marcar um campo como expressão — digitá-lo manualmente dentro do valor faz com que ele seja interpretado como **parte do texto literal**, não como o indicador de modo expressão.
+
+**Correção:** apagar o conteúdo do campo, ativar o modo expressão pelo ícone correto, e digitar só `quote:{{ $json.ticker }}` (sem o `=` manual).
+
+### 17. Mesmo bug, segunda vez: campo "Value" do Redis também com `=` literal
+
+Mesmo após corrigir a chave (item 16), a API ainda retornava dados simulados. Investigando diretamente a conexão Python↔Redis de dentro do pod da API (eliminando a hipótese de rede):
+
+```python
+import redis
+r = redis.Redis(host='n8n-redis.n8n.svc.cluster.local', port=6379, decode_responses=True)
+r.ping()              # True — conexão OK
+r.get('quote:PETR4')  # '={"ticker":"PETR4",...}'  ← "=" no início do JSON!
+```
+
+**Causa raiz:** o mesmo problema do item 16, mas no campo **"Value"** do node Redis — `=JSON.stringify($json)` digitado como texto literal em vez de expressão ativada corretamente. O `=` na frente do JSON quebra o `json.loads()` no código Python da API, que cai no `except` silencioso e retorna ao fallback simulado — exatamente o comportamento de design da API (nunca propagar erro ao usuário final), o que tornou esse bug mais difícil de notar à primeira vista, já que a API "funcionava" (sempre respondia 200), só não com o dado esperado.
+
+**Correção:** mesmo princípio — `{{ JSON.stringify($json) }}` via modo de expressão, sem o `=` manual.
+
+**Lição combinada (itens 16-17):** ao usar um node com modo "expressão" em qualquer ferramenta low-code (n8n, Node-RED, Zapier), prefira sempre o controle de UI que ativa esse modo (ícone, toggle, botão) em vez de tentar replicar a sintaxe manualmente — o caractere que ativa o modo e o caractere literal do valor podem ser idênticos, mas semanticamente distintos, e o erro resultante (um JSON malformado por um único caractere) é silencioso quando o sistema downstream tem fallback gracioso por design.
+
 ---
 
 ## 🔍 Decisões técnicas
@@ -496,7 +527,7 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] **Módulo** — Exposição via internet (Cloudflare Tunnel + cert-manager DNS-01, opt-in)
 - [x] **Módulo** — Synthetic Monitoring (3 checks HTTP externos, opt-in)
 - [x] **Módulo** — n8n + PostgreSQL + Redis (automação de uso geral, opt-in)
-- [ ] Workflow n8n alimentando a API com cotações reais da B3 (brapi.dev) via Redis
+- [x] Workflow n8n alimentando a API com cotações reais da B3 (brapi.dev) via Redis
 - [x] Validação completa `terraform apply` em ambiente real
 - [x] Screenshots do dashboard Grafana Cloud em funcionamento
 - [x] CI/CD (`terraform fmt`, `validate`, `tflint`) passando sem warnings
