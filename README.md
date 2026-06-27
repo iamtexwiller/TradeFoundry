@@ -219,9 +219,10 @@ TradeFoundry/
 ├── modules/
 │   ├── namespaces/                # dev, cert, prod + ResourceQuota
 │   ├── ingress/                   # NGINX Ingress Controller (Helm) + Ingress por ambiente
-│   ├── workload-demo/             # App de demonstração (nginx + /health) para gerar métricas reais
+│   ├── workload-demo/             # API FastAPI (cotações + ordens simuladas, fallback gracioso) — código em app/
 │   ├── observability/             # kube-prometheus-stack + dashboard/alerta via Grafana provider
 │   ├── exposure/                  # [opcional] Cloudflare Tunnel + cert-manager (DNS-01) — tradefoundry.dev.br
+│   ├── n8n/                       # [opcional] n8n + PostgreSQL + Redis — automação geral, exposto em n8n.tradefoundry.dev.br
 │   └── synthetic-monitoring/      # [opcional] Grafana Cloud Synthetic Monitoring — 3 checks HTTP externos
 ├── environments/
 │   └── local/
@@ -406,6 +407,33 @@ Ao expandir o dashboard com métricas de memória e restarts, o painel "Uso de m
 
 Esse caso reforça a importância de **validar a query direto na fonte (Prometheus local)** antes de assumir que um `No data` no Grafana Cloud é só atraso de propagação — duas causas com sintoma idêntico na superfície, mas diagnóstico totalmente diferente.
 
+### 14. Imagem Docker buildada no CI não rodava no cluster local (arquitetura)
+
+Ao trocar o workload de demonstração (nginx estático) por uma API real (FastAPI, publicada via GitHub Actions no GitHub Container Registry), os pods entraram em `ImagePullBackOff` nos três ambientes, mesmo a imagem aparecendo como publicada com sucesso no `ghcr.io`.
+
+**Diagnóstico:**
+```
+Failed to pull image "ghcr.io/.../tradefoundry-api:latest":
+no matching manifest for linux/arm64/v8 in the manifest list entries
+```
+
+**Causa raiz:** o GitHub Actions builda em runners `ubuntu-latest`, que são **amd64** (x86_64). O Minikube deste projeto roda em **arm64** (Apple Silicon). A primeira tentativa de corrigir isso — adicionar `platforms: linux/amd64,linux/arm64` ao `docker/build-push-action` — não resolveu sozinha: inspecionando o manifesto publicado (`docker manifest inspect`), a entrada para `arm64` existia, mas com `"architecture": "unknown"` e tamanho de poucos KB — sinal de que era apenas um **atestado de proveniência** (metadado de build), não uma imagem real para essa arquitetura.
+
+**Causa raiz completa:** faltava o passo `docker/setup-qemu-action`. O `docker/setup-buildx-action`, por si só, não habilita emulação de arquitetura estrangeira no runner — sem o QEMU, o Buildx silenciosamente pula a compilação real para `arm64` e só registra metadados, sem gerar erro visível no workflow (o CI reportava sucesso, mascarando o problema).
+
+**Correção** — adicionar o passo de QEMU antes do Buildx:
+```yaml
+- name: Set up QEMU
+  uses: docker/setup-qemu-action@v3
+
+- name: Set up Docker Buildx
+  uses: docker/setup-buildx-action@v3
+```
+
+Após a correção, `docker manifest inspect` passou a mostrar `amd64` e `arm64` com tamanhos reais (~2KB de manifesto cada, apontando para camadas de imagem completas), e o `kubectl rollout restart` trouxe os pods para `1/1 Running` nos três ambientes.
+
+**Lição:** um workflow de CI "verde" (sem erro reportado) não garante que o artefato produzido funciona em todos os ambientes-alvo — `docker manifest inspect` é a forma de confirmar, na fonte, que uma imagem multi-arquitetura tem builds reais (não só metadados) para cada plataforma declarada.
+
 ---
 
 ## 🔍 Decisões técnicas
@@ -444,10 +472,12 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] Fase 2 — Definição da arquitetura local
 - [x] **Módulo** — Namespaces (dev/cert/prod) + ResourceQuota
 - [x] **Módulo** — Ingress (NGINX via Helm)
-- [x] **Módulo** — Workload de demonstração (app + health)
+- [x] **Módulo** — API real (FastAPI: cotações + ordens simuladas, fallback gracioso, métricas Prometheus nativas)
 - [x] **Módulo** — Observabilidade (kube-prometheus-stack + Grafana Cloud)
 - [x] **Módulo** — Exposição via internet (Cloudflare Tunnel + cert-manager DNS-01, opt-in)
 - [x] **Módulo** — Synthetic Monitoring (3 checks HTTP externos, opt-in)
+- [x] **Módulo** — n8n + PostgreSQL + Redis (automação de uso geral, opt-in)
+- [ ] Workflow n8n alimentando a API com cotações reais da B3 (brapi.dev) via Redis
 - [x] Validação completa `terraform apply` em ambiente real
 - [x] Screenshots do dashboard Grafana Cloud em funcionamento
 - [x] CI/CD (`terraform fmt`, `validate`, `tflint`) passando sem warnings
