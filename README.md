@@ -434,6 +434,25 @@ Após a correção, `docker manifest inspect` passou a mostrar `amd64` e `arm64`
 
 **Lição:** um workflow de CI "verde" (sem erro reportado) não garante que o artefato produzido funciona em todos os ambientes-alvo — `docker manifest inspect` é a forma de confirmar, na fonte, que uma imagem multi-arquitetura tem builds reais (não só metadados) para cada plataforma declarada.
 
+### 15. `kubectl rollout restart` não pegou a versão nova de uma imagem `:latest`
+
+Após corrigir um bug no código da API (lista de tickers) e publicar uma nova imagem com a mesma tag `:latest`, um `kubectl rollout restart` nos três Deployments não trouxe a correção — os pods continuaram respondendo com o comportamento antigo, mesmo com `AGE` mostrando que eram pods recém-criados.
+
+**Diagnóstico:** confirmado via `docker manifest inspect` que a imagem nova realmente existia no `ghcr.io` (publicada poucos minutos antes, build com sucesso no GitHub Actions). O problema não era a imagem — era o **cache local** do Minikube: sem `image_pull_policy` declarado explicitamente no Terraform, o comportamento de cache para a tag `latest` não era garantido como `Always`.
+
+**Correção:**
+```hcl
+resource "kubernetes_deployment" "app" {
+  # ...
+  container {
+    image             = "${var.api_image}:${var.api_image_tag}"
+    image_pull_policy = "Always"
+  }
+}
+```
+
+**Lição:** ao usar a tag `latest` (ou qualquer tag mutável) em ambiente de desenvolvimento local, declarar `image_pull_policy = "Always"` explicitamente evita depender do comportamento implícito do provider/versão do Kubernetes — sem isso, "fiz o build, publiquei, reiniciei o pod" pode silenciosamente continuar servindo uma versão antiga.
+
 ---
 
 ## 🔍 Decisões técnicas
