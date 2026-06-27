@@ -22,6 +22,7 @@ from typing import Literal
 
 import redis
 from fastapi import FastAPI, HTTPException
+from prometheus_client import Counter, Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
@@ -54,6 +55,26 @@ app = FastAPI(
 # automaticamente em /metrics — complementa as métricas de infraestrutura
 # (CPU, memória, restarts) já coletadas pelo kube-prometheus-stack.
 Instrumentator().instrument(app).expose(app)
+
+# Métricas customizadas de domínio — diferente das métricas nativas do
+# Instrumentator (HTTP genérico), estas refletem o comportamento específico
+# da aplicação: quantas ordens foram criadas, se a cotação servida é real
+# ou simulada, e há quanto tempo o n8n atualizou cada cotação pela última vez.
+ORDERS_CREATED = Counter(
+    "tradefoundry_orders_created_total",
+    "Total de ordens simuladas criadas",
+    ["ticker", "side", "environment"],
+)
+QUOTE_SOURCE = Counter(
+    "tradefoundry_quote_requests_total",
+    "Total de cotações servidas, por origem do dado (real vs. simulado)",
+    ["ticker", "source", "environment"],
+)
+QUOTE_AGE_SECONDS = Gauge(
+    "tradefoundry_quote_age_seconds",
+    "Segundos desde a última atualização real da cotação no Redis (via n8n)",
+    ["ticker", "environment"],
+)
 
 # Conexão com Redis é opcional por design: se REDIS_HOST não estiver
 # configurado, ou se o Redis estiver fora do ar, a API cai no modo
@@ -96,9 +117,23 @@ def _get_quote(ticker: str) -> dict:
             if cached:
                 data = json.loads(cached)
                 data["source"] = "real"
+
+                # Idade do dado: há quanto tempo o n8n atualizou essa cotação
+                # pela última vez. Útil para detectar visualmente se o
+                # workflow parou de rodar, sem expor o preço em si.
+                try:
+                    quote_time = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - quote_time).total_seconds()
+                    QUOTE_AGE_SECONDS.labels(ticker=ticker, environment=ENVIRONMENT).set(age)
+                except Exception:
+                    pass  # timestamp ausente/malformado não deve quebrar a resposta
+
+                QUOTE_SOURCE.labels(ticker=ticker, source="real", environment=ENVIRONMENT).inc()
                 return data
         except Exception:
             pass  # Redis indisponível — segue para o fallback simulado, sem propagar erro
+
+    QUOTE_SOURCE.labels(ticker=ticker, source="simulated", environment=ENVIRONMENT).inc()
     return _simulated_quote(ticker)
 
 
@@ -164,6 +199,7 @@ def create_order(order: OrderRequest):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _orders.append(record)
+    ORDERS_CREATED.labels(ticker=ticker, side=order.side, environment=ENVIRONMENT).inc()
     return record
 
 
