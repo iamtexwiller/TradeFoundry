@@ -116,10 +116,14 @@ flowchart TD
     SM -->|testa /health a cada 15min| INT
     SM --> GC
 
+    N8N["🔄 n8n + Postgres + Redis<br/>(namespace n8n)"]
+    N8N -->|busca cotações a cada 5min| BRAPI["📊 brapi.dev"]
+    N8N -.->|exposto via| CF
+
     DEV["👤 Desenvolvedor"] -->|kubectl / port-forward| MK
 ```
 
-> Exposição via internet é **opcional** e controlada pela flag `expose_via_internet` (default `false`). O cluster funciona inteiramente offline; a exposição real via `tradefoundry.dev.br` é um módulo independente, descrito na seção [Exposição real via internet](#-exposição-real-via-internet-tradefoundrydevbr).
+> Exposição via internet é **opcional** e controlada pela flag `expose_via_internet` (default `false`). O cluster funciona inteiramente offline; a exposição real via `tradefoundry.dev.br` é um módulo independente, descrito na seção [Exposição real via internet](#-exposição-real-via-internet-tradefoundrydevbr). O n8n (`enable_n8n`) é igualmente opcional — ver seção [Cotações reais via n8n](#cotações-reais-via-n8n--automação-de-dados-com-fallback-gracioso).
 
 ### Mapeamento de equivalências (Azure → Local)
 
@@ -134,6 +138,7 @@ flowchart TD
 | Application Gateway + IP público + certificado gerenciado | Cloudflare Tunnel + cert-manager (DNS-01) | Domínio próprio `tradefoundry.dev.br`, TLS real, sem expor porta no roteador |
 | Terraform + `azurerm` provider | Terraform + `kubernetes`, `helm`, `grafana`, `cloudflare` providers | IaC continua sendo a peça central do projeto |
 | — (não existia na Fase 1) | Grafana Cloud Synthetic Monitoring | Testa os 3 ambientes de fora do cluster (como um usuário real), a cada 15min, sem custo |
+| — (não existia na Fase 1) | n8n + PostgreSQL + Redis | Automação de uso geral; primeiro caso de uso: cotações reais da B3 com fallback gracioso |
 
 ### Observabilidade — visão interna + visão externa
 
@@ -147,6 +152,40 @@ Essa combinação detecta categorias de problema diferentes: a visão interna mo
 ![Dashboard TradeFoundry no Grafana Cloud, mostrando 7 painéis: pods disponíveis, uso de CPU, uso de memória, restarts de pods, disponibilidade pública por ambiente (3 indicadores verdes mostrando "1") e latência de resposta pública](docs/dashboard-grafana-overview.png)
 
 *Dashboard real em produção (deste projeto) — métricas internas (Prometheus local) e externas (Synthetic Monitoring) lado a lado, todas definidas como código via Terraform.*
+
+### Cotações reais via n8n — automação de dados com fallback gracioso
+
+A API do TradeFoundry (`/quotes`, `/quotes/{ticker}`) expõe cotações de 4 ações da B3 com acesso gratuito e irrestrito na [brapi.dev](https://brapi.dev) (PETR4, VALE3, ITUB4, MGLU3). Em vez da própria API consultar essa fonte externa a cada request, essa responsabilidade foi deliberadamente extraída para o **n8n** — uma plataforma de automação de uso geral, adicionada ao projeto também como ferramenta de aprendizado contínuo, não só como peça de infraestrutura para este caso específico.
+
+```mermaid
+flowchart LR
+    CRON["⏱️ Schedule Trigger<br/>a cada 5 min"]
+    HTTP["🌐 HTTP Request<br/>brapi.dev/api/quote/..."]
+    CODE["{ } Code<br/>formata cada cotação"]
+    REDIS["🗄️ Redis<br/>quote:PETR4, quote:VALE3..."]
+    API["⚡ API FastAPI<br/>/quotes/{ticker}"]
+    USER["👤 Usuário"]
+
+    CRON --> HTTP --> CODE --> REDIS
+    REDIS -.lê.-> API --> USER
+
+    HTTP -.falha/timeout.-> SIM["🎲 Fallback simulado<br/>(dentro da própria API)"]
+    SIM --> USER
+```
+
+**Por que separar a busca de dados (n8n) da exposição de dados (API)?**
+
+- **Resiliência por camadas** — se a brapi.dev cair, o n8n simplesmente não atualiza o Redis naquele ciclo; a API continua servindo o último valor cacheado, e só recorre ao fallback simulado se não houver *nenhum* dado no Redis (ex: na primeira inicialização, antes do workflow rodar). Duas camadas de tolerância a falha, não uma.
+- **API permanece simples e rápida** — ela nunca depende de uma chamada de rede externa no caminho crítico de uma requisição do usuário; só lê do Redis, que está na mesma rede interna do cluster.
+- **n8n como ferramenta de uso geral** — a interface (`https://n8n.tradefoundry.dev.br`, protegida por autenticação básica) está disponível para criar outros workflows no futuro, não fica limitada a esse caso de uso específico.
+
+**Componentes de infraestrutura do n8n:**
+
+| Componente | Função |
+|---|---|
+| PostgreSQL | Armazena workflows, credenciais e histórico de execuções (SQLite, o default, não é recomendado pelo próprio n8n para uso real) |
+| Redis | Cache das cotações, compartilhado entre o n8n (escreve) e a API (lê) |
+| n8n | Interface de automação, exposta publicamente com autenticação básica |
 
 ### Stack tecnológico
 
