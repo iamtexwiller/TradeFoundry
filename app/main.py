@@ -36,7 +36,7 @@ TICKERS_BASE_PRICE = {
     "PETR4": 37.85,
     "VALE3": 61.20,
     "ITUB4": 33.40,
-    "BBAS3": 26.75,
+    "MGLU3": 8.50,
 }
 
 app = FastAPI(
