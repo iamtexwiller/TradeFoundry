@@ -484,6 +484,40 @@ r.get('quote:PETR4')  # '={"ticker":"PETR4",...}'  ← "=" no início do JSON!
 
 **Lição combinada (itens 16-17):** ao usar um node com modo "expressão" em qualquer ferramenta low-code (n8n, Node-RED, Zapier), prefira sempre o controle de UI que ativa esse modo (ícone, toggle, botão) em vez de tentar replicar a sintaxe manualmente — o caractere que ativa o modo e o caractere literal do valor podem ser idênticos, mas semanticamente distintos, e o erro resultante (um JSON malformado por um único caractere) é silencioso quando o sistema downstream tem fallback gracioso por design.
 
+### 18. `cloudflared` reiniciando ~1x a cada 1,5h por probes excessivamente sensíveis
+
+Observado ao longo de vários dias de operação: o pod do `cloudflared` acumulava restarts com frequência incomum (ex: 29 vezes em 47h).
+
+**Diagnóstico:**
+```bash
+kubectl describe pod -n default -l app.kubernetes.io/name=cloudflared
+# Events:
+#   Warning  Unhealthy  ...  Liveness probe failed: HTTP probe failed with statuscode: 503
+#   Normal   Killing    ...  Container cloudflared failed liveness probe, will be restarted
+```
+
+**Causa raiz:** o endpoint `/ready` (porta 2000) do `cloudflared` retorna `503` momentaneamente durante oscilações normais de rede — por exemplo, ao rotacionar uma das 4 conexões QUIC mantidas com a borda da Cloudflare. Isso não indica uma falha real do túnel, só uma flutuação transitória que se resolve em segundos. O chart Helm, porém, configurava a liveness probe com `failureThreshold: 1` — ou seja, uma única falha de 503 já era suficiente para o `kubelet` matar e recriar o container, mesmo que o túnel estivesse, na prática, saudável.
+
+**Correção** — probes mais tolerantes, declaradas explicitamente no `values` do Helm release:
+```hcl
+livenessProbe = {
+  httpGet             = { path = "/ready", port = 2000 }
+  initialDelaySeconds = 10
+  periodSeconds       = 10
+  timeoutSeconds      = 5
+  failureThreshold    = 5   # 50s de falha contínua antes de reiniciar
+}
+readinessProbe = {
+  httpGet             = { path = "/ready", port = 2000 }
+  initialDelaySeconds = 10
+  periodSeconds       = 10
+  timeoutSeconds      = 5
+  failureThreshold    = 3
+}
+```
+
+**Lição:** liveness probes existem para detectar deadlocks — condições que não se resolvem por conta própria. Um `failureThreshold` muito baixo (especialmente `1`) transforma flutuações passageiras, normais em qualquer aplicação de rede, em restarts desnecessários — o sintoma parece "instabilidade do serviço", mas a causa real é "a probe é impaciente demais para o comportamento esperado da aplicação".
+
 ---
 
 ## 🔍 Decisões técnicas
