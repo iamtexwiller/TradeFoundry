@@ -46,11 +46,16 @@ jobs:
             type=raw,value=latest
             type=sha,format=short
 
-      - name: Build and push
+	- name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: ./app
           push: true
+          # Build multi-arquitetura: GitHub Actions roda em amd64 (x86_64),
+          # mas o Minikube deste projeto roda em arm64 (Apple Silicon) — sem
+          # declarar as duas plataformas, o pull falha no cluster com
+          # "no matching manifest for linux/arm64/v8".
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
