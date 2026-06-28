@@ -603,6 +603,18 @@ Duas pegadinhas adicionais encontradas no caminho:
 
 **Lição:** ao depurar "uma métrica não aparece", é importante isolar cada camada na ordem certa: (1) o endpoint `/metrics` responde quando acessado direto no pod? (2) o Prometheus Operator tem um `PodMonitor`/`ServiceMonitor` válido apontando para esses pods? (3) os labels do `PodMonitor` batem com o `podMonitorSelector` configurado na instância `Prometheus`? (4) a porta está corretamente nomeada, não só numerada? (5) o pod já recebeu tráfego real desde que subiu, para a métrica ter pelo menos um valor? Pular qualquer uma dessas camadas leva a conclusões erradas sobre onde está o problema.
 
+### 20. Alerta de "cotação desatualizada" — falso positivo estrutural em fins de semana
+
+Ao validar o alerta `tradefoundry-quote-stale` (dispara se `tradefoundry_quote_age_seconds` > 600s), o painel "Idade da última cotação real" mostrava ~54.680 segundos (mais de 15h) sem se atualizar — mesmo com o histórico de execuções do n8n confirmando sucesso a cada 5 minutos, sem nenhuma falha.
+
+**Diagnóstico:** o Redis tinha um timestamp real de `2026-06-28T01:49:52Z`, e consultar a brapi.dev diretamente confirmou a causa: o campo `regularMarketTime` retornado pela API reflete o horário do **último pregão registrado pela B3**, não o horário da consulta (`requestedAt`). Em um fim de semana — quando a bolsa não opera — esse valor fica legitimamente parado desde o fechamento de sexta-feira, mesmo que o n8n continue consultando e gravando com sucesso a cada ciclo.
+
+**Conclusão:** isso não é um bug do pipeline — é o comportamento correto e esperado do domínio (mercado financeiro só atualiza preços durante o pregão). O alerta, como desenhado, gera um falso positivo estrutural em todo fim de semana e feriado da bolsa, já que assume implicitamente que o preço deveria mudar a cada 5 minutos, o que só é verdade durante o horário de mercado aberto.
+
+**Decisão:** manter o alerta como está, aceitando o falso positivo em fins de semana — o threshold de 10 minutos continua sendo o valor correto para detectar uma falha real do workflow durante a semana (quando o pregão está aberto), que é o cenário que realmente importa monitorar. Resolver isso de forma completa exigiria lógica de calendário de pregão (feriados, horário de funcionamento B3), uma complexidade que não se justifica para o propósito deste projeto.
+
+**Lição:** nem toda métrica que "parece estagnada" indica falha de infraestrutura — confirmar o comportamento esperado do domínio (neste caso, que mercados financeiros têm horário de funcionamento) evita tratar um sinal correto como bug, e mostra a diferença entre "o pipeline parou" e "o dado de origem não muda agora, por design".
+
 ---
 
 ## 🔍 Decisões técnicas
