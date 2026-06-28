@@ -187,6 +187,10 @@ flowchart LR
 | Redis | Cache das cotações, compartilhado entre o n8n (escreve) e a API (lê) |
 | n8n | Interface de automação, exposta publicamente com autenticação básica |
 
+![Histórico de execuções do workflow "Cotações B3" no n8n, mostrando execuções recorrentes a cada 5 minutos com status "Succeeded", e o output do node "Gravar no Redis" listando as cotações de PETR4, VALE3, ITUB4 e MGLU3 com source "real" e timestamp](docs/n8n-execucoes.png)
+
+*Workflow rodando de forma autônoma, a cada 5 minutos, sem intervenção manual — histórico real de execuções (deste projeto) com o output do node Redis confirmando os 4 tickers gravados com `source: "real"`.*
+
 ### Stack tecnológico
 
 [![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=flat-square&logo=terraform&logoColor=white)]()
@@ -556,6 +560,48 @@ readinessProbe = {
 ```
 
 **Lição:** liveness probes existem para detectar deadlocks — condições que não se resolvem por conta própria. Um `failureThreshold` muito baixo (especialmente `1`) transforma flutuações passageiras, normais em qualquer aplicação de rede, em restarts desnecessários — o sintoma parece "instabilidade do serviço", mas a causa real é "a probe é impaciente demais para o comportamento esperado da aplicação".
+
+### 19. Métricas customizadas da aplicação nunca eram coletadas (annotations vs. PodMonitor)
+
+Desde a introdução da API real (com métricas Prometheus nativas e customizadas via `prometheus-fastapi-instrumentator` e `prometheus_client`), os pods foram configurados com as annotations clássicas:
+```yaml
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+```
+O endpoint `/metrics` sempre respondeu corretamente quando acessado diretamente, mas as métricas nunca apareciam no Prometheus local nem no Grafana Cloud — mesmo após múltiplas chamadas geradoras de tráfego e horas de espera.
+
+**Causa raiz:** o Prometheus Operator (componente central do `kube-prometheus-stack`) **não suporta descoberta de scrape targets via annotations** — esse é um comportamento do Prometheus "clássico" standalone. O Operator exige um CRD `PodMonitor` ou `ServiceMonitor` explícito; as annotations configuradas nos pods nunca tiveram efeito nenhum, desde a primeira versão do projeto, mas isso só se tornou visível ao tentar coletar uma métrica que não vinha de outra fonte (CPU/memória/restarts sempre vieram do `cAdvisor`/`kube-state-metrics`, que são alvos *nativamente* monitorados pelo chart, mascarando a lacuna).
+
+**Correção — criar o `PodMonitor` via Terraform:**
+```hcl
+resource "kubernetes_manifest" "api_pod_monitor" {
+  manifest = {
+    apiVersion = "monitoring.coreos.com/v1"
+    kind       = "PodMonitor"
+    metadata = {
+      name      = "tradefoundry-api"
+      namespace = "monitoring"
+      # Precisa bater com o nome do helm_release — é assim que o Operator
+      # decide quais PodMonitors descobrir, por padrão.
+      labels = { release = "monitoring" }
+    }
+    spec = {
+      namespaceSelector = { matchNames = [for ns in var.environment_namespaces : ns] }
+      selector           = { matchLabels = { app = "tradefoundry-app" } }
+      podMetricsEndpoints = [{ port = "metrics", path = "/metrics" }]
+    }
+  }
+  depends_on = [helm_release.kube_prometheus_stack]
+}
+```
+
+Duas pegadinhas adicionais encontradas no caminho:
+1. **A porta do container precisa ter `name` declarado** — `podMetricsEndpoints[].port` referencia o **nome** da porta (`metrics`), não o número; sem nomear a porta no container, o `PodMonitor` não encontra nenhum endpoint, mesmo com toda a configuração de seletor correta.
+2. **Diagnóstico em camadas, incluindo "reabrir o port-forward"** — depois de confirmar que a configuração final do Prometheus (extraída diretamente do Secret gerado pelo Operator, via `kubectl get secret ... | base64 -d | gunzip`) já incluía o job correto, e os targets apareciam `up`, a métrica ainda retornava vazio — porque os pods tinham sido recriados recentemente (por outra correção) e ainda não tinham recebido nenhuma chamada à API desde o restart. Métricas de contador como `prometheus_client.Counter` ficam em memória; um pod novo começa zerado.
+
+**Lição:** ao depurar "uma métrica não aparece", é importante isolar cada camada na ordem certa: (1) o endpoint `/metrics` responde quando acessado direto no pod? (2) o Prometheus Operator tem um `PodMonitor`/`ServiceMonitor` válido apontando para esses pods? (3) os labels do `PodMonitor` batem com o `podMonitorSelector` configurado na instância `Prometheus`? (4) a porta está corretamente nomeada, não só numerada? (5) o pod já recebeu tráfego real desde que subiu, para a métrica ter pelo menos um valor? Pular qualquer uma dessas camadas leva a conclusões erradas sobre onde está o problema.
 
 ---
 
