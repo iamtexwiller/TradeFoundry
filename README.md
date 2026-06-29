@@ -661,9 +661,9 @@ Expor uma porta no roteador residencial exigiria IP fixo (ou DDNS), configuraç�
 - [x] Workflow n8n alimentando a API com cotações reais da B3 (brapi.dev) via Redis
 - [x] Validação completa `terraform apply` em ambiente real
 - [x] Screenshots do dashboard Grafana Cloud em funcionamento
-- [x] CI/CD (`terraform fmt`, `validate`, `tflint`) passando sem warnings
+- [x] CI/CD — 3 workflows: `terraform-validate` (fmt/validate/tflint), `build-api-image` (build/push multi-arch), `smoke-test` (valida API pública pós-deploy)
 - [x] Validação ponta a ponta de `https://dev.tradefoundry.dev.br`, `cert.` e `prod.` com certificado TLS válido
-- [ ] Testes automatizados de smoke test pós-deploy (GitHub Actions)
+- [x] Testes automatizados de smoke test pós-deploy (GitHub Actions)
 
 ---
 
