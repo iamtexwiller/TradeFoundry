@@ -1,0 +1,103 @@
+name: Smoke Test (API pública)
+
+# Confirma que os 3 ambientes públicos (dev/cert/prod) respondem corretamente
+# após uma alteração no código da API. Não substitui o deploy em si (feito
+# manualmente via terraform apply + kubectl rollout restart neste projeto) —
+# serve como confirmação rápida de que a mudança já propagou e está saudável.
+#
+# Disparo:
+#   - Automático: a cada push que altere código da API (após o autor já ter
+#     feito o rollout restart manualmente — ver README, seção "Como rodar")
+#   - Manual: via "Run workflow" no GitHub Actions, a qualquer momento
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+  workflow_dispatch: {}
+
+env:
+  DOMAINS: "dev.tradefoundry.dev.br cert.tradefoundry.dev.br prod.tradefoundry.dev.br"
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Testar /health em todos os ambientes
+        run: |
+          set -e
+          for domain in $DOMAINS; do
+            echo "→ https://$domain/health"
+            response=$(curl -s -w "\n%{http_code}" "https://$domain/health")
+            body=$(echo "$response" | head -n -1)
+            status=$(echo "$response" | tail -n 1)
+
+            if [ "$status" != "200" ]; then
+              echo "::error::$domain/health retornou HTTP $status (esperado: 200)"
+              exit 1
+            fi
+            if ! echo "$body" | grep -q "Status: UP"; then
+              echo "::error::$domain/health não contém 'Status: UP'. Corpo: $body"
+              exit 1
+            fi
+            echo "  OK — $body"
+          done
+
+      - name: Testar /quotes (todos os tickers) em todos os ambientes
+        run: |
+          set -e
+          tickers="PETR4 VALE3 ITUB4 MGLU3"
+          for domain in $DOMAINS; do
+            for ticker in $tickers; do
+              echo "→ https://$domain/quotes/$ticker"
+              response=$(curl -s -w "\n%{http_code}" "https://$domain/quotes/$ticker")
+              body=$(echo "$response" | head -n -1)
+              status=$(echo "$response" | tail -n 1)
+
+              if [ "$status" != "200" ]; then
+                echo "::error::$domain/quotes/$ticker retornou HTTP $status"
+                exit 1
+              fi
+              if ! echo "$body" | grep -q "\"ticker\":\"$ticker\""; then
+                echo "::error::$domain/quotes/$ticker não retornou o ticker esperado. Corpo: $body"
+                exit 1
+              fi
+              echo "  OK — $body"
+            done
+          done
+
+      - name: Testar POST /orders e GET /orders no ambiente dev
+        run: |
+          set -e
+          domain="dev.tradefoundry.dev.br"
+
+          echo "→ POST https://$domain/orders"
+          response=$(curl -s -w "\n%{http_code}" -X POST "https://$domain/orders" \
+            -H "Content-Type: application/json" \
+            -d '{"ticker":"PETR4","side":"buy","quantity":1}')
+          body=$(echo "$response" | head -n -1)
+          status=$(echo "$response" | tail -n 1)
+
+          if [ "$status" != "201" ]; then
+            echo "::error::POST $domain/orders retornou HTTP $status (esperado: 201)"
+            exit 1
+          fi
+          if ! echo "$body" | grep -q "\"status\":\"filled\""; then
+            echo "::error::POST $domain/orders não retornou status 'filled'. Corpo: $body"
+            exit 1
+          fi
+          echo "  OK — ordem criada"
+
+          echo "→ GET https://$domain/orders"
+          status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/orders")
+          if [ "$status" != "200" ]; then
+            echo "::error::GET $domain/orders retornou HTTP $status"
+            exit 1
+          fi
+          echo "  OK — listagem de ordens acessível"
+
+      - name: Resumo
+        if: success()
+        run: echo "✅ Smoke test passou — /health, /quotes (4 tickers) e /orders saudáveis em dev, cert e prod."
